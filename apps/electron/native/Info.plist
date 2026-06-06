@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.familyhub.eventkit</string>
+  <key>CFBundleName</key>
+  <string>FamilyHub EventKit</string>
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>FamilyHub shows today's events on the kitchen dashboard.</string>
+  <key>NSCalendarsUsageDescription</key>
+  <string>FamilyHub shows today's events on the kitchen dashboard.</string>
+  <key>NSRemindersFullAccessUsageDescription</key>
+  <string>FamilyHub shows your reminders on the kitchen dashboard.</string>
+  <key>NSRemindersUsageDescription</key>
+  <string>FamilyHub shows your reminders on the kitchen dashboard.</string>
+</dict>
+</plist>

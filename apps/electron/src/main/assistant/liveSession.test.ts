@@ -1,0 +1,89 @@
+import { describe, expect, it, vi } from "vitest";
+import { interpretLiveMessage, type LiveEvent } from "./liveSession";
+import type { LiveServerMessage } from "@google/genai";
+
+vi.mock("@google/genai", () => ({
+  GoogleGenAI: vi.fn(),
+  Modality: { AUDIO: "AUDIO" },
+  Type: { OBJECT: "OBJECT", STRING: "STRING" },
+}));
+
+function interpret(message: unknown): LiveEvent[] {
+  return interpretLiveMessage(message as LiveServerMessage);
+}
+
+describe("interpretLiveMessage", () => {
+  it("returns nothing when there is no server content", () => {
+    expect(interpret({})).toEqual([]);
+  });
+
+  it("extracts input and output transcripts", () => {
+    expect(
+      interpret({
+        serverContent: {
+          inputTranscription: { text: "hello there" },
+          outputTranscription: { text: "hi back" },
+        },
+      }),
+    ).toEqual([
+      { kind: "inputTranscript", text: "hello there" },
+      { kind: "outputTranscript", text: "hi back" },
+    ]);
+  });
+
+  it("extracts audio parts with a default mime type", () => {
+    expect(
+      interpret({
+        serverContent: {
+          modelTurn: {
+            parts: [
+              { inlineData: { data: "AAAA", mimeType: "audio/pcm;rate=24000" } },
+              { text: "ignored" },
+              { inlineData: { data: "BBBB" } },
+            ],
+          },
+        },
+      }),
+    ).toEqual([
+      { kind: "audio", data: "AAAA", mimeType: "audio/pcm;rate=24000" },
+      { kind: "audio", data: "BBBB", mimeType: "audio/pcm;rate=24000" },
+    ]);
+  });
+
+  it("flags interruptions and turn completion", () => {
+    expect(
+      interpret({ serverContent: { interrupted: true, turnComplete: true } }),
+    ).toEqual([{ kind: "interrupted" }, { kind: "turnComplete" }]);
+  });
+
+  it("extracts tool calls with their arguments", () => {
+    expect(
+      interpret({
+        toolCall: {
+          functionCalls: [
+            {
+              id: "call-1",
+              name: "end_conversation",
+              args: { reason: "user said goodbye" },
+            },
+          ],
+        },
+      }),
+    ).toEqual([
+      {
+        kind: "toolCall",
+        id: "call-1",
+        name: "end_conversation",
+        args: { reason: "user said goodbye" },
+      },
+    ]);
+  });
+
+  it("defaults missing tool-call id and args", () => {
+    expect(
+      interpret({ toolCall: { functionCalls: [{ name: "end_conversation" }] } }),
+    ).toEqual([
+      { kind: "toolCall", id: "", name: "end_conversation", args: {} },
+    ]);
+  });
+});

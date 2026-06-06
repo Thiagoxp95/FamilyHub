@@ -1,0 +1,12 @@
+node_modules
+out
+release
+dist
+.turbo
+.DS_Store
+*.log
+coverage
+.env
+.env.local
+.env.*.local
+.credentials
