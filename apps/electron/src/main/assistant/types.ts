@@ -40,6 +40,7 @@ export interface DiarizedTurn {
 export interface AssistantConfigStatus {
   gemini: boolean;
   googleSpeech: boolean;
+  localListener: boolean;
 }
 
 export interface AssistantEvent {

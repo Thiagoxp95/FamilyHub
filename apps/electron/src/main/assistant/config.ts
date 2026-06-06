@@ -1,7 +1,13 @@
+import { resolveSidecarPython, resolveSidecarScript } from "./localTranscriber";
 import type { AssistantConfigStatus } from "./types";
+
+export function localListenerAvailable(): boolean {
+  return resolveSidecarPython() !== null && resolveSidecarScript() !== null;
+}
 
 export function readAssistantConfigStatus(
   environment: NodeJS.ProcessEnv = process.env,
+  isLocalListenerAvailable: () => boolean = localListenerAvailable,
 ): AssistantConfigStatus {
   return {
     gemini:
@@ -11,6 +17,7 @@ export function readAssistantConfigStatus(
     googleSpeech:
       hasValue(environment.GOOGLE_APPLICATION_CREDENTIALS) ||
       hasValue(environment.GOOGLE_CLOUD_PROJECT),
+    localListener: isLocalListenerAvailable(),
   };
 }
 

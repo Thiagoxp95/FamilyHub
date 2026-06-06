@@ -42,17 +42,19 @@ describe("readAssistantConfigStatus", () => {
   });
 
   it("reports Gemini and Google Speech provider configuration", () => {
-    expect(readAssistantConfigStatus()).toEqual({
+    expect(readAssistantConfigStatus(process.env, () => false)).toEqual({
       gemini: false,
       googleSpeech: false,
+      localListener: false,
     });
 
     process.env.GEMINI_API_KEY = "gemini";
     process.env.GOOGLE_APPLICATION_CREDENTIALS = "/tmp/google.json";
 
-    expect(readAssistantConfigStatus()).toEqual({
+    expect(readAssistantConfigStatus(process.env, () => true)).toEqual({
       gemini: true,
       googleSpeech: true,
+      localListener: true,
     });
   });
 
