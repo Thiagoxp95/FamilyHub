@@ -1,21 +1,17 @@
-# FamilyHub Parakeet sidecar
+# FamilyHub wake-word sidecar
 
-Always-on local ASR for the "James" wake word and post-wake capture. Apple
-Silicon only (uses MLX). Requires **Python ≥ 3.10**.
+Always-on local **keyword spotter** for the "James" wake word. Once it fires,
+the app opens Gemini Live, which does the actual transcription — so this only
+has to spot one word.
 
-## How it works
+## Why a keyword spotter (not full ASR)
 
-Continuous streaming ASR is the wrong tool for wake-word detection: fed one
-long-lived stream with silence between utterances it drops isolated short words
-(a bare "James" transcribes to "") and hallucinates on ambient noise. So this
-sidecar uses **voice-activity detection** (`webrtcvad`, energy fallback) to find
-each spoken utterance and transcribes it with a **fresh decode** — reliable even
-for a single word. It emits an early `partial` once an utterance is ~0.9 s long
-(low-latency wake on phrases) and a `final` when the utterance ends.
-
-Protocol (newline-delimited over stdio): base64 int16 LINEAR16 @16 kHz frames in
-(or `{"cmd":"reset"}`), `{"type":"partial"|"final","text","words"}` JSON out.
-The first line is an empty `partial` ready-signal emitted once the model loads.
+A full ASR model (e.g. Parakeet) leans on language-model context, so it reliably
+transcribes "James" inside a phrase but **drops a bare "James" said on its own**.
+This sidecar uses **Vosk** constrained to a tiny grammar (`["james", "[unk]"]`),
+which is a dedicated keyword spotter: it fires on an isolated "James" across
+speakers, and confidence-gated final results keep ordinary speech ("the name…")
+from false-triggering. It's lightweight (~40 MB model, no PyTorch) and fast.
 
 ## Setup
 
@@ -24,33 +20,33 @@ cd sidecar
 PYTHON_BIN=python3.11 ./setup.sh
 ```
 
-`setup.sh` rejects Python < 3.10 and rebuilds the venv with `--clear`. It creates
-`sidecar/.venv` and installs `parakeet-mlx`, `numpy`, and `webrtcvad-wheels`. The
-model (~600 MB) downloads on first run and is cached by Hugging Face.
-
-The Electron main process auto-discovers `sidecar/.venv/bin/python` and
-`sidecar/parakeet_listener.py` (relative to cwd, this module, or
-`process.resourcesPath`). Override with `FAMILYHUB_SIDECAR_PYTHON` /
-`FAMILYHUB_SIDECAR_SCRIPT`.
+Requires **Python ≥ 3.10**. `setup.sh` creates `sidecar/.venv`, installs `vosk`,
+and downloads the small English model into `sidecar/models/`. The Electron main
+process auto-discovers `sidecar/.venv/bin/python` and `sidecar/wake_listener.py`
+(relative to cwd, this module, or `process.resourcesPath`). Overrides:
+`FAMILYHUB_SIDECAR_PYTHON`, `FAMILYHUB_SIDECAR_SCRIPT`, `FAMILYHUB_VOSK_MODEL`.
 
 ## Self-test (recommended)
 
-Verifies the sidecar catches the wake word end-to-end, without the GUI/mic —
-synthesizes speech with `say` and streams it through the sidecar:
+Verifies wake detection end-to-end without the GUI/mic — synthesizes speech with
+`say` and streams it through the sidecar:
 
 ```bash
 ./.venv/bin/python selftest.py
 ```
 
-Expected: `PASS — the sidecar catches the wake word.` (exit 0).
+Expected: `PASS — wakes on 'James', quiet otherwise.` (exit 0).
 
-## Smoke test (ready signal only)
+## Protocol
 
-```bash
-printf '%s\n' "$(./.venv/bin/python -c 'import base64,sys; sys.stdout.write(base64.b64encode(bytes(3200)).decode())')" \
-  | ./.venv/bin/python parakeet_listener.py
-```
+Newline-delimited over stdio: base64 int16 LINEAR16 @16 kHz frames in (or
+`{"cmd":"reset"}`), `{"type":"partial"|"final","text","words":[]}` JSON out. The
+first line is an empty `partial` ready-signal once the model loads; a transcript
+containing the wake word is emitted only when one is confidently spotted.
 
-Expected: a JSON line `{"type": "partial", "text": "", "words": []}` (ready
-signal). Note: an isolated 3200-byte silence frame won't produce a transcript;
-use `selftest.py` to check real recognition.
+## Upgrade path
+
+For best-in-class accuracy you could swap Vosk for **Picovoice Porcupine** (type
+"James" in the free console → `.ppn`, runs in-process via the Node SDK) or train
+a custom **livekit-wakeword** ONNX model. Vosk was chosen here because it needs
+no signup, no training, and no GPU.

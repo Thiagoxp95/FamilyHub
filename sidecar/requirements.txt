@@ -1,6 +1,5 @@
-parakeet-mlx
+# Dedicated wake-word spotter. Vosk is a lightweight offline speech recognizer
+# (no PyTorch); constrained to a keyword grammar it reliably spots an isolated
+# wake word, which a context-hungry ASR drops. numpy is only used by selftest.py.
+vosk
 numpy
-# Voice-activity detection for utterance segmentation. webrtcvad-wheels ships
-# prebuilt wheels (the original webrtcvad needs a C toolchain). If it is
-# unavailable the sidecar falls back to an energy-based gate.
-webrtcvad-wheels

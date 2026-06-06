@@ -11,3 +11,4 @@ coverage
 .env.*.local
 .credentials
 sidecar/.venv/
+sidecar/models/

@@ -107,7 +107,7 @@ export function resolveSidecarScript(): string | null {
   }
 
   return firstExisting(
-    sidecarRoots().map((root) => resolve(root, "parakeet_listener.py")),
+    sidecarRoots().map((root) => resolve(root, "wake_listener.py")),
   );
 }
 
@@ -140,16 +140,16 @@ function firstExisting(paths: string[]): string | null {
   return paths.find((path) => existsSync(path)) ?? null;
 }
 
-// Long-lived Parakeet sidecar. Communicates over stdio: base64 audio lines in,
-// JSON transcript lines out. A line beginning with "{" on stdin is a control
-// command (base64 never starts with "{").
-export class ParakeetSidecarTranscriber implements LocalTranscriber {
+// Long-lived wake-word sidecar (Vosk keyword spotter). Communicates over stdio:
+// base64 audio lines in, JSON transcript lines out. A line beginning with "{" on
+// stdin is a control command (base64 never starts with "{"). It emits a
+// transcript containing a wake word only when one is confidently spotted.
+export class WakeWordSidecar implements LocalTranscriber {
   private process: ChildProcessWithoutNullStreams | null = null;
 
   constructor(
     private readonly pythonPath: string,
     private readonly scriptPath: string,
-    private readonly model = "mlx-community/parakeet-tdt-0.6b-v3",
   ) {}
 
   async start(handlers: LocalTranscriberHandlers): Promise<void> {
@@ -157,7 +157,7 @@ export class ParakeetSidecarTranscriber implements LocalTranscriber {
       return;
     }
 
-    const child = spawn(this.pythonPath, [this.scriptPath, "--model", this.model], {
+    const child = spawn(this.pythonPath, [this.scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.process = child;

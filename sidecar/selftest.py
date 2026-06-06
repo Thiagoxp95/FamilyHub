@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Offline sanity check for the Parakeet wake-word sidecar.
+"""Offline sanity check for the wake-word sidecar.
 
-Synthesizes speech with macOS `say`, streams it through parakeet_listener.py
-exactly as the app does (base64 16 kHz frames over stdio), and checks that an
-isolated "James" and a full phrase are both transcribed. Run with the sidecar
+Synthesizes speech with macOS `say`, streams it through wake_listener.py exactly
+as the app does (base64 16 kHz frames over stdio), and checks that an isolated
+"James" wakes while ordinary speech and silence do not. Run with the sidecar
 venv:
 
     sidecar/.venv/bin/python sidecar/selftest.py
 
-Exits 0 if isolated "James" is detected, 1 otherwise.
+Exits 0 if isolated "James" wakes and the negatives stay quiet.
 """
 
 import base64
@@ -16,42 +16,53 @@ import json
 import os
 import subprocess
 import sys
-import threading
 import tempfile
-
-import numpy as np
+import wave
 
 SR = 16000
-FRAME = 2048  # ~128 ms, matching the renderer's frame size
+FRAME_BYTES = 2048 * 2  # ~128 ms of int16 @ 16 kHz, matching the renderer
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def say_pcm16(text):
-    """Render `text` with macOS `say` and return 16 kHz mono int16 samples."""
-    import librosa  # noqa: PLC0415 - heavy import, only needed here
-
-    with tempfile.NamedTemporaryFile(suffix=".aiff", delete=False) as f:
-        aiff = f.name
+def say_pcm(text, voice=None):
+    """Render `text` with macOS `say` → 16 kHz mono int16 PCM bytes."""
+    aiff = tempfile.mktemp(suffix=".aiff")
+    wav = tempfile.mktemp(suffix=".wav")
     try:
-        subprocess.run(["say", "-o", aiff, text], check=True)
-        audio, _ = librosa.load(aiff, sr=SR, mono=True)
+        cmd = ["say"]
+        if voice:
+            cmd += ["-v", voice]
+        cmd += ["-o", aiff, text]
+        subprocess.run(cmd, check=True)
+        subprocess.run(
+            ["afconvert", aiff, "-o", wav, "-d", "LEI16@16000", "-c", "1", "-f", "WAVE"],
+            check=True,
+        )
+        with wave.open(wav, "rb") as w:
+            return w.readframes(w.getnframes())
     finally:
-        os.unlink(aiff)
-    return (np.clip(audio, -1, 1) * 32767).astype(np.int16)
+        for path in (aiff, wav):
+            if os.path.exists(path):
+                os.unlink(path)
 
 
-def run_through_sidecar(stream_i16):
+def silence(seconds):
+    return b"\x00\x00" * int(seconds * SR)
+
+
+def wakes(pcm_bytes):
     frames = [
-        base64.b64encode(stream_i16[i : i + FRAME].tobytes()).decode()
-        for i in range(0, len(stream_i16), FRAME)
+        base64.b64encode(pcm_bytes[i : i + FRAME_BYTES]).decode()
+        for i in range(0, len(pcm_bytes), FRAME_BYTES)
     ]
     proc = subprocess.Popen(
-        [sys.executable, os.path.join(HERE, "parakeet_listener.py")],
+        [sys.executable, os.path.join(HERE, "wake_listener.py")],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         text=True,
     )
+    import threading
 
     def feed():
         for line in frames:
@@ -59,45 +70,41 @@ def run_through_sidecar(stream_i16):
         proc.stdin.close()
 
     threading.Thread(target=feed, daemon=True).start()
-    transcripts = []
-    for line in proc.stdout:
-        msg = json.loads(line)
-        if msg.get("text"):
-            transcripts.append((msg["type"], msg["text"]))
-    return transcripts
-
-
-def silence(seconds):
-    return np.zeros(int(seconds * SR), dtype=np.int16)
+    hits = [json.loads(line)["text"] for line in proc.stdout if json.loads(line)["text"]]
+    return hits
 
 
 def main():
     print("Synthesizing speech via `say`…")
-    james = say_pcm16("James")
-    phrase = say_pcm16("James, what's the weather in Toronto today?")
+    positives = [("isolated 'James'", say_pcm("James"))]
+    for voice in ("Daniel", "Karen"):
+        positives.append((f"isolated 'James' ({voice})", say_pcm("James", voice)))
+    negatives = [
+        ("'what's the weather'", say_pcm("what is the weather like today")),
+        ("'the name of the guy is John'", say_pcm("the name of the guy is John")),
+    ]
 
-    print("\n[1/2] isolated 'James' (between silence):")
-    stream = np.concatenate([silence(1.5), james, silence(1.5)])
-    isolated = run_through_sidecar(stream)
-    for kind, text in isolated:
-        print(f"    {kind:7} {text!r}")
-    isolated_ok = any("james" in t.lower() for _, t in isolated)
+    ok = True
+    print("\nShould WAKE:")
+    for label, pcm in positives:
+        woke = bool(wakes(silence(0.8) + pcm + silence(1.2)))
+        print(f"  {label:34} {'WAKE' if woke else 'MISS'}")
+        ok = ok and woke
 
-    print("\n[2/2] phrase:")
-    stream = np.concatenate([silence(1.0), phrase, silence(1.5)])
-    phrase_out = run_through_sidecar(stream)
-    for kind, text in phrase_out:
-        print(f"    {kind:7} {text!r}")
-    phrase_ok = any("james" in t.lower() for _, t in phrase_out)
+    print("\nShould stay quiet:")
+    for label, pcm in negatives:
+        woke = bool(wakes(silence(0.6) + pcm + silence(0.8)))
+        print(f"  {label:34} {'FALSE-WAKE' if woke else 'quiet'}")
+        ok = ok and not woke
 
-    print()
-    print(f"  isolated 'James' detected: {'YES' if isolated_ok else 'NO'}")
-    print(f"  phrase 'James' detected  : {'YES' if phrase_ok else 'NO'}")
+    quiet_silence = not bool(wakes(silence(3)))
+    print(f"  {'pure silence':34} {'quiet' if quiet_silence else 'FALSE-WAKE'}")
+    ok = ok and quiet_silence
 
-    if isolated_ok:
-        print("\nPASS — the sidecar catches the wake word.")
+    if ok:
+        print("\nPASS — wakes on 'James', quiet otherwise.")
         return 0
-    print("\nFAIL — isolated 'James' was not detected.")
+    print("\nFAIL — see results above.")
     return 1
 
 

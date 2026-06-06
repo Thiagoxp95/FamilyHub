@@ -7,7 +7,7 @@ import {
   type LiveStateEvent,
 } from "./liveController";
 import {
-  ParakeetSidecarTranscriber,
+  WakeWordSidecar,
   resolveSidecarPython,
   resolveSidecarScript,
   type LocalTranscriber,
@@ -71,7 +71,7 @@ export function registerAssistantIpc(userDataDirectory: string): void {
     geminiApiKey && sidecarPython && sidecarScript
       ? new LiveController({
           createTranscriber: (): LocalTranscriber =>
-            new ParakeetSidecarTranscriber(sidecarPython, sidecarScript),
+            new WakeWordSidecar(sidecarPython, sidecarScript),
           createSession: () => new GeminiLiveSession({ apiKey: geminiApiKey }),
           sink,
         })
