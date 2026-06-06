@@ -24,6 +24,20 @@ describe("transcriptContainsWakePhrase", () => {
     expect(transcriptContainsWakePhrase("jameson coffee", ["james"])).toBe(false);
   });
 
+  it("matches curated mis-spellings of the wake word", () => {
+    expect(transcriptContainsWakePhrase("hames are you there", ["james"])).toBe(
+      true,
+    );
+    expect(transcriptContainsWakePhrase("Jaymes?", ["james"])).toBe(true);
+  });
+
+  it("does not match unrelated similar words", () => {
+    expect(transcriptContainsWakePhrase("what are their names", ["james"])).toBe(
+      false,
+    );
+    expect(transcriptContainsWakePhrase("play a game", ["james"])).toBe(false);
+  });
+
   it("returns false for empty transcripts", () => {
     expect(transcriptContainsWakePhrase("", ["james"])).toBe(false);
   });

@@ -1,2 +1,6 @@
 parakeet-mlx
 numpy
+# Voice-activity detection for utterance segmentation. webrtcvad-wheels ships
+# prebuilt wheels (the original webrtcvad needs a C toolchain). If it is
+# unavailable the sidecar falls back to an energy-based gate.
+webrtcvad-wheels

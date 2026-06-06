@@ -26,6 +26,7 @@ export type LiveStateEvent =
   | { type: "outputTranscript"; text: string }
   | { type: "status"; message: string }
   | { type: "listener"; state: "loading" | "ready" | "offline"; detail?: string }
+  | { type: "localHeard"; text: string; phase: string }
   | { type: "interrupted" }
   | { type: "turnComplete" };
 
@@ -121,7 +122,13 @@ export class LiveController {
   }
 
   handleFrame(frame: string): void {
-    this.transcriber?.write(frame);
+    // Only run wake detection while idle. During connecting/live/closing the
+    // mic is destined for Gemini, so feeding the local ASR there just wastes
+    // compute and competes with the live audio path.
+    if (this.state.phase === "idle") {
+      this.transcriber?.write(frame);
+    }
+
     this.apply({ type: "frame", frame });
   }
 
@@ -139,11 +146,20 @@ export class LiveController {
   }
 
   private handleTranscript(text: string): void {
+    const trimmed = text.trim();
+
+    // Diagnostic: surface every transcript + the current phase so the wake path
+    // is observable (is the listener still hearing after a session ends?).
+    if (trimmed.length > 0) {
+      this.sink.sendLive({ type: "localHeard", text: trimmed, phase: this.state.phase });
+    }
+
     if (this.state.phase !== "idle") {
       return;
     }
 
     if (transcriptContainsWakePhrase(text, this.wakePhrases)) {
+      this.sink.noteInfo(`Wake detected: "${trimmed}"`);
       this.apply({ type: "wake" });
     }
   }

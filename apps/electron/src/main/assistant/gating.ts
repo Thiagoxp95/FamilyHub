@@ -56,6 +56,23 @@ export function evaluateWakeSessionTurn({
   };
 }
 
+// Common ASR mis-spellings of single-word wake words, so a slightly misheard
+// utterance still wakes. Recall matters more than precision here — a false
+// positive just opens a live session that times out on silence — but we use a
+// curated list rather than edit-distance so ordinary words ("names", "jameson")
+// don't trigger.
+const wakeWordAliases: Record<string, readonly string[]> = {
+  james: ["jaymes", "jaimes", "jamez", "jaymz", "hames", "jaymez"],
+};
+
+function tokenMatchesWord(token: string, word: string): boolean {
+  if (token === word) {
+    return true;
+  }
+
+  return wakeWordAliases[word]?.includes(token) ?? false;
+}
+
 // Lenient wake check for the live-audio trigger: does the (arbitrarily chunked)
 // transcript contain a wake phrase anywhere? A false positive only opens a live
 // session that closes itself on silence, so erring toward sensitivity is fine.
@@ -69,7 +86,7 @@ export function transcriptContainsWakePhrase(
     return false;
   }
 
-  const tokens = new Set(normalized.split(" "));
+  const tokens = normalized.split(" ");
 
   return wakePhrases.some((phrase) => {
     const words = normalizeTranscript(phrase).split(" ").filter(Boolean);
@@ -80,7 +97,7 @@ export function transcriptContainsWakePhrase(
     }
 
     if (words.length === 1) {
-      return tokens.has(firstWord);
+      return tokens.some((token) => tokenMatchesWord(token, firstWord));
     }
 
     return normalized.includes(words.join(" "));

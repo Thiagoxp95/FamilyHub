@@ -39,6 +39,7 @@ export function App(): React.JSX.Element {
   >(null);
   const [listenerDetail, setListenerDetail] = useState("");
   const [listenerElapsed, setListenerElapsed] = useState(0);
+  const [localHeard, setLocalHeard] = useState("");
   const micStartedRef = useRef(false);
   const playerRef = useRef<AudioPlayer | null>(null);
 
@@ -87,6 +88,9 @@ export function App(): React.JSX.Element {
         case "listener":
           setListenerState(event.state);
           setListenerDetail(event.detail ?? "");
+          break;
+        case "localHeard":
+          setLocalHeard(event.text);
           break;
         case "interrupted":
           player.stop();
@@ -290,6 +294,12 @@ export function App(): React.JSX.Element {
               <StatusDot active={listenerState === "ready"} />
               <span>{listenerLabel}</span>
             </div>
+            {localHeard ? (
+              <div className="bridge-row">
+                <StatusDot active={false} />
+                <span>Heard locally: {localHeard.slice(0, 80)}</span>
+              </div>
+            ) : null}
           </div>
           <div className="control-row">
             <button

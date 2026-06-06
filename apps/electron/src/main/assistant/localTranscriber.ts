@@ -1,7 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export interface TranscriptWord {
   word: string;
@@ -115,6 +116,18 @@ function sidecarRoots(): string[] {
     resolve(process.cwd(), "sidecar"),
     resolve(process.cwd(), "../../sidecar"),
   ];
+
+  // process.cwd() is unreliable for an Electron app (Finder-launched apps run
+  // with cwd "/"), so also resolve relative to this module's location, which is
+  // stable across dev and launch context.
+  try {
+    const moduleDir = dirname(fileURLToPath(import.meta.url));
+    for (const up of ["..", "../..", "../../..", "../../../..", "../../../../.."]) {
+      roots.push(resolve(moduleDir, up, "sidecar"));
+    }
+  } catch {
+    // import.meta.url unavailable (e.g. an unexpected bundling target) — ignore.
+  }
 
   if (process.resourcesPath) {
     roots.push(resolve(process.resourcesPath, "sidecar"));
