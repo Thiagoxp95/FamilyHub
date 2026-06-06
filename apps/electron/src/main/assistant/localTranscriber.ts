@@ -189,7 +189,11 @@ export class ParakeetSidecarTranscriber implements LocalTranscriber {
     }
 
     await new Promise<void>((resolveStop) => {
-      child.once("exit", () => resolveStop());
+      const killTimer = setTimeout(() => child.kill("SIGKILL"), 2_000);
+      child.once("exit", () => {
+        clearTimeout(killTimer);
+        resolveStop();
+      });
       child.stdin.end();
       child.kill("SIGTERM");
     });
