@@ -74,6 +74,7 @@ export function App(): React.JSX.Element {
           if (event.mode === "live") {
             setLiveInput("");
             setLiveOutput("");
+            setLocalHeard("");
           }
           break;
         case "inputTranscript":
@@ -90,7 +91,7 @@ export function App(): React.JSX.Element {
           setListenerDetail(event.detail ?? "");
           break;
         case "localHeard":
-          setLocalHeard(event.text);
+          setLocalHeard(`(${event.phase}) ${event.text}`);
           break;
         case "interrupted":
           player.stop();
