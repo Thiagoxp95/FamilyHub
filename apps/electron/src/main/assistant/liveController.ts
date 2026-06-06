@@ -68,6 +68,7 @@ export class LiveController {
   private endReason = "goodbye";
   private inputTurnBuffer = "";
   private outputTurnBuffer = "";
+  private pendingReason: string | null = null;
 
   constructor(options: LiveControllerOptions) {
     this.createTranscriber = options.createTranscriber;
@@ -101,10 +102,12 @@ export class LiveController {
   }
 
   async endLive(): Promise<void> {
+    this.pendingReason = "stopped";
     this.apply({ type: "stop" });
   }
 
   async stop(): Promise<void> {
+    this.pendingReason = "stopped";
     this.apply({ type: "stop" });
     const transcriber = this.transcriber;
     this.transcriber = null;
@@ -151,6 +154,7 @@ export class LiveController {
     this.session = session;
     this.finalized = false;
     this.endRequested = false;
+    this.pendingReason = null;
     this.inputTurnBuffer = "";
     this.outputTurnBuffer = "";
     this.sink.sendLive({ type: "status", message: "Connecting…" });
@@ -195,14 +199,21 @@ export class LiveController {
     this.clearTimers();
     this.inputTurnBuffer = "";
     this.outputTurnBuffer = "";
+    this.endRequested = false;
+
+    const effectiveReason = this.pendingReason ?? reason;
+    this.pendingReason = null;
 
     if (this.state.phase !== "idle") {
       this.apply({ type: "sessionClosed" });
     }
 
     this.transcriber?.reset();
-    this.sink.noteInfo(`Live session ended (${reason}).`);
-    this.sink.sendLive({ type: "status", message: `Session ended (${reason}).` });
+    this.sink.noteInfo(`Live session ended (${effectiveReason}).`);
+    this.sink.sendLive({
+      type: "status",
+      message: `Session ended (${effectiveReason}).`,
+    });
     this.sink.sendLive({ type: "mode", mode: "wake" });
     this.sink.emitSnapshot();
   }
@@ -210,6 +221,10 @@ export class LiveController {
   // Gemini live events: buffer transcripts, pass audio through, handle the
   // end_conversation tool and turn completion. Mirrors the prior ipc.ts logic.
   private handleLiveEvent(event: LiveEvent): void {
+    if (this.finalized) {
+      return;
+    }
+
     switch (event.kind) {
       case "inputTranscript":
         this.inputTurnBuffer += event.text;
@@ -236,7 +251,10 @@ export class LiveController {
             clearTimeout(this.endFallbackTimer);
           }
 
-          this.endFallbackTimer = setTimeout(() => this.apply({ type: "stop" }), 5_000);
+          this.endFallbackTimer = setTimeout(() => {
+            this.pendingReason = this.endReason;
+            this.apply({ type: "stop" });
+          }, 5_000);
         }
         break;
       case "interrupted":
@@ -258,6 +276,7 @@ export class LiveController {
         this.sink.emitSnapshot();
 
         if (this.endRequested) {
+          this.pendingReason = this.endReason;
           this.apply({ type: "stop" });
           return;
         }
@@ -272,7 +291,10 @@ export class LiveController {
       clearTimeout(this.idleTimer);
     }
 
-    this.idleTimer = setTimeout(() => this.apply({ type: "stop" }), this.idleTimeoutMs);
+    this.idleTimer = setTimeout(() => {
+      this.pendingReason = "timed out";
+      this.apply({ type: "stop" });
+    }, this.idleTimeoutMs);
   }
 
   private clearTimers(): void {

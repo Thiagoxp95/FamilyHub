@@ -133,4 +133,19 @@ describe("LiveController", () => {
 
     expect(sink.live).toContainEqual({ type: "mode", mode: "wake" });
   });
+
+  it("reports the end reason on the status channel when stopped", async () => {
+    const { controller, transcriber, sessions, sink } = await setup();
+
+    transcriber.emit("james hello");
+    await vi.waitFor(() => expect(sessions).toHaveLength(1));
+
+    await controller.endLive();
+    await vi.waitFor(() => expect(sessions[0]?.closed).toBe(true));
+
+    expect(sink.live).toContainEqual({
+      type: "status",
+      message: "Session ended (stopped).",
+    });
+  });
 });
