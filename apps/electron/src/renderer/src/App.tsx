@@ -34,6 +34,11 @@ export function App(): React.JSX.Element {
   const [liveStatus, setLiveStatus] = useState("");
   const [liveInput, setLiveInput] = useState("");
   const [liveOutput, setLiveOutput] = useState("");
+  const [listenerState, setListenerState] = useState<
+    "loading" | "ready" | "offline" | null
+  >(null);
+  const [listenerDetail, setListenerDetail] = useState("");
+  const [listenerElapsed, setListenerElapsed] = useState(0);
   const micStartedRef = useRef(false);
   const playerRef = useRef<AudioPlayer | null>(null);
 
@@ -78,6 +83,10 @@ export function App(): React.JSX.Element {
           break;
         case "status":
           setLiveStatus(event.message);
+          break;
+        case "listener":
+          setListenerState(event.state);
+          setListenerDetail(event.detail ?? "");
           break;
         case "interrupted":
           player.stop();
@@ -129,6 +138,33 @@ export function App(): React.JSX.Element {
       void cleanup.then((stop) => stop());
     };
   }, []);
+
+  // Tick an elapsed-seconds counter while the local model is loading, so a long
+  // first-run download reads differently from a fast cached start.
+  useEffect(() => {
+    if (listenerState !== "loading") {
+      setListenerElapsed(0);
+      return;
+    }
+
+    const startedAt = Date.now();
+    const intervalId = window.setInterval(() => {
+      setListenerElapsed(Math.round((Date.now() - startedAt) / 1000));
+    }, 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, [listenerState]);
+
+  const listenerLabel =
+    listenerState === "ready"
+      ? 'Listener ready — say "James"'
+      : listenerState === "loading"
+        ? `Listener loading model… ${listenerElapsed}s (first run downloads ~600 MB)${
+            listenerDetail ? ` — ${lastLine(listenerDetail).slice(0, 60)}` : ""
+          }`
+        : listenerState === "offline"
+          ? "Listener offline"
+          : "Listener: waiting…";
 
   const configuredProviderCount = [
     snapshot.config.localListener,
@@ -250,6 +286,10 @@ export function App(): React.JSX.Element {
               <StatusDot active={micStatus.startsWith("Microphone live")} />
               <span>{micStatus}</span>
             </div>
+            <div className="bridge-row">
+              <StatusDot active={listenerState === "ready"} />
+              <span>{listenerLabel}</span>
+            </div>
           </div>
           <div className="control-row">
             <button
@@ -343,6 +383,13 @@ function MicrophoneMeter({
 
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unexpected assistant error.";
+}
+
+// Sidecar stderr can arrive as multi-line chunks (e.g. a progress bar); show the
+// most recent non-empty line so the loading detail stays compact.
+function lastLine(text: string): string {
+  const lines = text.split(/[\r\n]+/).filter((line) => line.trim().length > 0);
+  return lines.at(-1) ?? text;
 }
 
 function isAssistantSnapshot(value: unknown): value is AssistantSnapshot {

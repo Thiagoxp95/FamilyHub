@@ -57,6 +57,7 @@ type LiveStateEvent =
   | { type: "inputTranscript"; text: string }
   | { type: "outputTranscript"; text: string }
   | { type: "status"; message: string }
+  | { type: "listener"; state: "loading" | "ready" | "offline"; detail?: string }
   | { type: "interrupted" }
   | { type: "turnComplete" };
 

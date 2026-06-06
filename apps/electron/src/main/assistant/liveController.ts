@@ -25,6 +25,7 @@ export type LiveStateEvent =
   | { type: "inputTranscript"; text: string }
   | { type: "outputTranscript"; text: string }
   | { type: "status"; message: string }
+  | { type: "listener"; state: "loading" | "ready" | "offline"; detail?: string }
   | { type: "interrupted" }
   | { type: "turnComplete" };
 
@@ -69,6 +70,7 @@ export class LiveController {
   private inputTurnBuffer = "";
   private outputTurnBuffer = "";
   private pendingReason: string | null = null;
+  private listenerReady = false;
 
   constructor(options: LiveControllerOptions) {
     this.createTranscriber = options.createTranscriber;
@@ -86,13 +88,35 @@ export class LiveController {
 
     const transcriber = this.createTranscriber();
     this.transcriber = transcriber;
+    this.listenerReady = false;
 
     await transcriber.start({
-      onTranscript: (message) => this.handleTranscript(message.text),
-      onError: (message) => this.sink.noteInfo(`Listener error: ${message}`),
-      onExit: () => this.sink.noteInfo("Listener stopped."),
+      onTranscript: (message) => {
+        // The first line the sidecar emits is its ready signal (model loaded).
+        if (!this.listenerReady) {
+          this.listenerReady = true;
+          this.sink.sendLive({ type: "listener", state: "ready" });
+        }
+
+        this.handleTranscript(message.text);
+      },
+      onError: (message) => {
+        if (this.listenerReady) {
+          this.sink.noteInfo(`Listener error: ${message}`);
+        } else {
+          // Pre-ready stderr is model download/load progress; surface it so the
+          // UI shows movement instead of an opaque wait (first run is ~600 MB).
+          this.sink.sendLive({ type: "listener", state: "loading", detail: message });
+        }
+      },
+      onExit: () => {
+        this.listenerReady = false;
+        this.sink.sendLive({ type: "listener", state: "offline" });
+        this.sink.noteInfo("Listener stopped.");
+      },
     });
 
+    this.sink.sendLive({ type: "listener", state: "loading" });
     transcriber.reset();
   }
 
