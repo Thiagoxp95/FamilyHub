@@ -3,6 +3,7 @@
 interface AssistantConfigStatus {
   gemini: boolean;
   googleSpeech: boolean;
+  localListener: boolean;
 }
 
 interface SpeakerProfileSummary {
@@ -87,11 +88,7 @@ interface AssistantBridge {
     transcript: string,
     speakerLabel: string,
   ) => Promise<TranscriptTurnResult>;
-  detectWake: (
-    audio: Uint8Array,
-    sampleRateHertz: number,
-  ) => Promise<{ woke: boolean }>;
-  sendLiveFrame: (frame: string) => void;
+  sendMicFrame: (frame: string) => void;
   endLive: () => Promise<boolean>;
   onLive: (callback: (event: LiveStateEvent) => void) => () => void;
   onLiveAudio: (callback: (chunk: LiveAudioChunk) => void) => () => void;

@@ -61,14 +61,8 @@ contextBridge.exposeInMainWorld("familyHub", {
         audio,
         sampleRateHertz,
       ) as Promise<unknown>,
-    detectWake: (audio: Uint8Array, sampleRateHertz: number) =>
-      ipcRenderer.invoke(
-        "assistant:detectWake",
-        audio,
-        sampleRateHertz,
-      ) as Promise<{ woke: boolean }>,
-    sendLiveFrame: (frame: string) => {
-      ipcRenderer.send("assistant:liveFrame", frame);
+    sendMicFrame: (frame: string) => {
+      ipcRenderer.send("assistant:micFrame", frame);
     },
     endLive: () => ipcRenderer.invoke("assistant:endLive") as Promise<boolean>,
     onLive: (callback: (event: unknown) => void) => {

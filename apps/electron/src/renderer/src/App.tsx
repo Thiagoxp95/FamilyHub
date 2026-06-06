@@ -7,6 +7,7 @@ const emptySnapshot: AssistantSnapshot = {
   config: {
     gemini: false,
     googleSpeech: false,
+    localListener: false,
   },
   currentSpeakerName: null,
   events: [],
@@ -21,8 +22,6 @@ const emptySnapshot: AssistantSnapshot = {
 
 // Mic capture + Gemini Live both use 16 kHz LINEAR16 mono.
 const captureSampleRate = 16000;
-// ~2.5 s of audio per wake-word probe while idle.
-const wakeChunkSamples = captureSampleRate * 2.5;
 
 export function App(): React.JSX.Element {
   const [autoStartAttempted, setAutoStartAttempted] = useState(false);
@@ -36,7 +35,6 @@ export function App(): React.JSX.Element {
   const [liveInput, setLiveInput] = useState("");
   const [liveOutput, setLiveOutput] = useState("");
   const micStartedRef = useRef(false);
-  const liveModeRef = useRef<LiveMode>("wake");
   const playerRef = useRef<AudioPlayer | null>(null);
 
   useEffect(() => {
@@ -63,7 +61,6 @@ export function App(): React.JSX.Element {
     const offLive = window.familyHub.assistant.onLive((event) => {
       switch (event.type) {
         case "mode":
-          liveModeRef.current = event.mode;
           setLiveMode(event.mode);
 
           // On "live" reset the transcript. On returning to "wake" we leave any
@@ -118,7 +115,6 @@ export function App(): React.JSX.Element {
 
     micStartedRef.current = true;
     const cleanup = startMicrophoneLoop({
-      getMode: () => liveModeRef.current,
       onError: (message) => {
         setMicLevel(0);
         setMicStatus(message);
@@ -134,9 +130,10 @@ export function App(): React.JSX.Element {
     };
   }, []);
 
-  const configuredProviderCount = Object.values(snapshot.config).filter(
-    Boolean,
-  ).length;
+  const configuredProviderCount = [
+    snapshot.config.localListener,
+    snapshot.config.gemini,
+  ].filter(Boolean).length;
   const sessionActive = liveMode === "live";
   const headline = !snapshot.isListening
     ? "Voice paused"
@@ -238,8 +235,8 @@ export function App(): React.JSX.Element {
           <div className="diag-providers">
             <p className="section-label">Providers · {configuredProviderCount}/2</p>
             <ProviderRow
-              configured={snapshot.config.googleSpeech}
-              name="Google Speech (wake word)"
+              configured={snapshot.config.localListener}
+              name="Local listener (Parakeet)"
             />
             <ProviderRow
               configured={snapshot.config.gemini}
@@ -366,12 +363,10 @@ function formatEventTime(value: string): string {
 }
 
 async function startMicrophoneLoop({
-  getMode,
   onLevel,
   onError,
   onReady,
 }: {
-  getMode: () => LiveMode;
   onError: (message: string) => void;
   onLevel: (level: number) => void;
   onReady: (sampleRate: number) => void;
@@ -400,8 +395,6 @@ async function startMicrophoneLoop({
     const mutedOutput = audioContext.createGain();
     let pendingSamples: number[] = [];
     let smoothedLevel = 0;
-    let wakeBusy = false;
-    let previousMode: LiveMode = getMode();
 
     mutedOutput.gain.value = 0;
     processor.onaudioprocess = (event) => {
@@ -420,43 +413,17 @@ async function startMicrophoneLoop({
     processor.connect(mutedOutput);
     mutedOutput.connect(audioContext.destination);
 
+    // The main process is always listening (local Parakeet) and decides what to
+    // buffer/forward, so the renderer streams every frame unconditionally.
     const intervalId = window.setInterval(() => {
-      const mode = getMode();
-
-      // On a mode switch, drop buffered audio so a half-spoken wake word or a
-      // stale chunk doesn't leak into the next mode.
-      if (mode !== previousMode) {
-        previousMode = mode;
-        pendingSamples = [];
-        return;
-      }
-
       if (pendingSamples.length === 0) {
         return;
       }
 
-      if (mode === "live") {
-        const samples = pendingSamples;
-        pendingSamples = [];
-        const pcm = convertFloatSamplesToLinear16(samples);
-        window.familyHub.assistant.sendLiveFrame(int16ToBase64(pcm));
-        return;
-      }
-
-      if (pendingSamples.length >= wakeChunkSamples && !wakeBusy) {
-        const samples = pendingSamples;
-        pendingSamples = [];
-        const pcm = convertFloatSamplesToLinear16(samples);
-        wakeBusy = true;
-        void window.familyHub.assistant
-          .detectWake(new Uint8Array(pcm.buffer), captureSampleRate)
-          .catch((error: unknown) => {
-            onError(`Wake detection failed: ${readErrorMessage(error)}`);
-          })
-          .finally(() => {
-            wakeBusy = false;
-          });
-      }
+      const samples = pendingSamples;
+      pendingSamples = [];
+      const pcm = convertFloatSamplesToLinear16(samples);
+      window.familyHub.assistant.sendMicFrame(int16ToBase64(pcm));
     }, 120);
 
     onReady(audioContext.sampleRate);
