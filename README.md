@@ -18,3 +18,21 @@ apps/electron
   src/preload   Isolated preload bridge
   src/renderer  React renderer
 ```
+
+## Voice assistant (James)
+
+The assistant uses an always-on local ASR sidecar (Parakeet, Apple Silicon) for
+the "James" wake word and to capture speech while the Gemini Live session
+connects. Set it up once (requires Python 3.10+):
+
+```bash
+cd sidecar
+./setup.sh
+```
+
+Required environment (in `.env.local` or `~/.familyhub/.env`):
+
+- `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) — Gemini Live conversation.
+
+Google Cloud Speech credentials are now optional (used only by the diagnostics
+chunk path, not for the wake word).
