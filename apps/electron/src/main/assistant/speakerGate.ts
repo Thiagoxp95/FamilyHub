@@ -7,8 +7,9 @@ import { createInterface } from "node:readline";
 // so only the invoker's voice (not the TV/YouTube/others) reaches Gemini.
 
 export interface SpeakerGateDecision {
-  type: "enrolled" | "forward" | "dropped";
+  type: "enrolled" | "forward" | "dropped" | "rejected";
   score?: number | undefined;
+  speakerId?: string | undefined;
 }
 
 export interface SpeakerGateHandlers {
@@ -23,6 +24,7 @@ export interface SpeakerGateLike {
   feed(frame: string): void;
   reset(): void;
   stop(): Promise<void>;
+  loadVoiceprints(speakers: { id: string; vec: number[] }[]): void;
 }
 
 export class SpeakerGate implements SpeakerGateLike {
@@ -66,9 +68,15 @@ export class SpeakerGate implements SpeakerGateLike {
 
       if (type === "forward" && typeof record.audio === "string") {
         handlers.onForward(record.audio);
-        handlers.onDecision?.({ type: "forward", score });
+        handlers.onDecision?.({
+          type: "forward",
+          score,
+          speakerId: typeof record.speakerId === "string" ? record.speakerId : undefined,
+        });
       } else if (type === "dropped") {
         handlers.onDecision?.({ type: "dropped", score });
+      } else if (type === "rejected") {
+        handlers.onDecision?.({ type: "rejected", score });
       } else if (type === "enrolled") {
         handlers.onDecision?.({ type: "enrolled" });
       }
@@ -93,6 +101,12 @@ export class SpeakerGate implements SpeakerGateLike {
 
   reset(): void {
     this.process?.stdin.write(`${JSON.stringify({ cmd: "reset" })}\n`);
+  }
+
+  loadVoiceprints(speakers: { id: string; vec: number[] }[]): void {
+    this.process?.stdin.write(
+      `${JSON.stringify({ cmd: "load", speakers })}\n`,
+    );
   }
 
   async stop(): Promise<void> {
