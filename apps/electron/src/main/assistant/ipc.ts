@@ -17,12 +17,14 @@ import {
   resolveGateScript,
   resolveSidecarPython,
   resolveSidecarScript,
+  resolveSpeakerEmbedScript,
   type LocalTranscriber,
 } from "./localTranscriber";
 import { SpeakerGate } from "./speakerGate";
 import { FileSpeakerProfileStore } from "./profileStore";
 import { EnrollmentStore } from "./enrollmentStore";
 import { AssistantService, PlaceholderGeminiLive } from "./service";
+import { VoiceprintStore } from "./voiceprintStore";
 import type { AssistantSnapshot } from "./types";
 import {
   GeminiLiveTextAdapter,
@@ -50,10 +52,17 @@ export function registerAssistantIpc(
   const speech = readGoogleSpeechConfigured()
     ? new GoogleSpeechDiarizationAdapter()
     : null;
+  const sidecarPython = resolveSidecarPython();
+  const embedScript = sidecarPython ? resolveSpeakerEmbedScript() : null;
+  const voiceprintStore =
+    sidecarPython && embedScript
+      ? new VoiceprintStore(userDataDirectory, sidecarPython, embedScript)
+      : new VoiceprintStore(userDataDirectory, sidecarPython ?? "", embedScript ?? "");
   const service = new AssistantService({
     gemini,
     profileStore: new FileSpeakerProfileStore(userDataDirectory),
     enrollmentStore: new EnrollmentStore(userDataDirectory),
+    voiceprintStore,
   });
 
   // The single renderer we stream live state to. Set when the renderer starts
@@ -153,7 +162,6 @@ export function registerAssistantIpc(
     }
   };
 
-  const sidecarPython = resolveSidecarPython();
   const sidecarScript = resolveSidecarScript();
   const gateScript = resolveGateScript();
   const controller =
@@ -214,6 +222,11 @@ export function registerAssistantIpc(
       return result;
     },
   );
+
+  ipcMain.handle("assistant:finalizeEnrollment", async (event, speakerId: unknown) => {
+    await service.finalizeEnrollment(requireString(speakerId, "Speaker id"));
+    await emitSnapshot(event.sender, service);
+  });
 
   ipcMain.handle("assistant:startListening", async (event) => {
     liveSender = event.sender;

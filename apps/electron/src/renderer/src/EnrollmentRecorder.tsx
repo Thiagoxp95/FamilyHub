@@ -96,7 +96,13 @@ export function EnrollmentRecorder({
           >
             {count >= ENROLLMENT_TARGET ? "Record more" : "Record"}
           </button>
-          <button type="button" onClick={onClose}>
+          <button
+            type="button"
+            onClick={() => {
+              void window.familyHub.assistant.finalizeEnrollment(speakerId);
+              onClose();
+            }}
+          >
             Done
           </button>
         </div>

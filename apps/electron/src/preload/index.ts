@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld("familyHub", {
         speakerId,
         audioBase64,
       ) as Promise<{ sampleCount: number }>,
+    finalizeEnrollment: (speakerId: string) =>
+      ipcRenderer.invoke("assistant:finalizeEnrollment", speakerId) as Promise<void>,
     getSnapshot: () =>
       ipcRenderer.invoke("assistant:getSnapshot") as Promise<unknown>,
     lockSessionSpeaker: (speakerId: string, speakerLabel: string) =>

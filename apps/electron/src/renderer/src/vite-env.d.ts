@@ -15,6 +15,7 @@ interface SpeakerProfileSummary {
 
 interface EnrolledSpeaker extends SpeakerProfileSummary {
   sampleCount: number;
+  hasVoiceprint: boolean;
 }
 
 interface AssistantEvent {
@@ -74,6 +75,7 @@ interface LiveAudioChunk {
 interface AssistantBridge {
   deleteSpeaker: (speakerId: string) => Promise<boolean>;
   enrollSpeaker: (name: string) => Promise<SpeakerProfileSummary>;
+  finalizeEnrollment: (speakerId: string) => Promise<void>;
   getSnapshot: () => Promise<AssistantSnapshot>;
   lockSessionSpeaker: (
     speakerId: string,
