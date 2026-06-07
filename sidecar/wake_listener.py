@@ -255,10 +255,12 @@ def build_engine(args, wake_words):
     model = args.model or os.environ.get(
         "FAMILYHUB_WAKE_MODEL", os.path.join(HERE, "james.onnx")
     )
-    vosk_model = args.vosk_model or os.environ.get(
-        "FAMILYHUB_VOSK_MODEL",
-        os.path.join(HERE, "models", "vosk-model-small-en-us-0.15"),
-    )
+    # Prefer the larger lgraph model for a better Stage-2 confirm in noise
+    # (~200 MB, fits the 16 GB appliance); fall back to the small model if absent.
+    default_vosk = os.path.join(HERE, "models", "vosk-model-en-us-0.22-lgraph")
+    if not os.path.isdir(default_vosk):
+        default_vosk = os.path.join(HERE, "models", "vosk-model-small-en-us-0.15")
+    vosk_model = args.vosk_model or os.environ.get("FAMILYHUB_VOSK_MODEL", default_vosk)
     engine = TwoStageEngine(
         model, args.threshold, vosk_model, args.wake_phrase, args.confirm_confidence
     )
