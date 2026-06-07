@@ -20,6 +20,11 @@
 body {
   margin: 0;
   min-width: 320px;
+  overflow: hidden;
+}
+
+#root {
+  block-size: 100dvh;
 }
 
 h1,
@@ -86,10 +91,11 @@ button:disabled {
 
 /* ---------- Kiosk shell (portrait) ---------- */
 .kiosk {
+  block-size: 100dvh;
   display: flex;
   flex-direction: column;
   gap: 14px;
-  min-height: 100vh;
+  overflow: hidden;
   padding: 16px;
 }
 
@@ -776,6 +782,39 @@ button:disabled {
 .cal-cal {
   color: #7a898c;
   font-size: 0.8rem;
+}
+
+.cal-agenda {
+  display: grid;
+  gap: 16px;
+}
+
+.cal-day-head {
+  color: #8a5b12;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  margin-block-end: 8px;
+  text-transform: uppercase;
+}
+
+.cal-day-list {
+  display: grid;
+  gap: 11px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.cal-item {
+  align-items: start;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 64px minmax(0, 1fr);
+}
+
+.cal-item--reminder .cal-time {
+  color: #8a5b12;
 }
 
 /* ---------- Reminders quadrant ---------- */

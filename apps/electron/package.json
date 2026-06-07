@@ -6,12 +6,11 @@
   "main": "./out/main/index.js",
   "scripts": {
     "build": "npm run typecheck && electron-vite build",
-    "build:native": "bash native/build.sh",
     "dev": "electron-vite dev",
     "dev:packed": "npm run package && open release/mac-arm64/FamilyHub.app",
-    "dist": "npm run build && npm run build:native && electron-builder",
+    "dist": "npm run build && electron-builder",
     "lint": "eslint . --max-warnings=0",
-    "package": "npm run build && npm run build:native && electron-builder --dir",
+    "package": "npm run build && electron-builder --dir",
     "preview": "electron-vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
@@ -47,10 +46,6 @@
     ],
     "extraResources": [
       {
-        "from": "resources/fh-eventkit",
-        "to": "fh-eventkit"
-      },
-      {
         "from": "../../sidecar",
         "to": "sidecar",
         "filter": ["**/*", "!.venv/**"]
@@ -60,9 +55,8 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
-        "NSCalendarsFullAccessUsageDescription": "FamilyHub shows today's events on the kitchen dashboard.",
-        "NSMicrophoneUsageDescription": "FamilyHub uses the microphone to listen for the James wake word and assistant commands.",
-        "NSRemindersFullAccessUsageDescription": "FamilyHub shows your reminders on the kitchen dashboard."
+        "NSAppleEventsUsageDescription": "FamilyHub uses Automation to read your Calendar and Reminders for the kitchen dashboard.",
+        "NSMicrophoneUsageDescription": "FamilyHub uses the microphone to listen for the James wake word and assistant commands."
       },
       "target": "dmg"
     },

@@ -1,9 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import { interpretLiveMessage, type LiveEvent } from "./liveSession";
+import {
+  GeminiLiveSession,
+  interpretLiveMessage,
+  type LiveEvent,
+} from "./liveSession";
 import type { LiveServerMessage } from "@google/genai";
 
+const connectMock = vi.hoisted(() => vi.fn());
+
 vi.mock("@google/genai", () => ({
-  GoogleGenAI: vi.fn(),
+  GoogleGenAI: vi.fn(function GoogleGenAI() {
+    return { live: { connect: connectMock } };
+  }),
   Modality: { AUDIO: "AUDIO" },
   Type: { OBJECT: "OBJECT", STRING: "STRING" },
 }));
@@ -85,5 +93,29 @@ describe("interpretLiveMessage", () => {
     ).toEqual([
       { kind: "toolCall", id: "", name: "end_conversation", args: {} },
     ]);
+  });
+});
+
+describe("GeminiLiveSession", () => {
+  it("tells the model James is the assistant identity, not a family member", async () => {
+    connectMock.mockResolvedValueOnce({
+      close: vi.fn(),
+      sendRealtimeInput: vi.fn(),
+      sendToolResponse: vi.fn(),
+    });
+
+    await new GeminiLiveSession({ apiKey: "test-key" }).start({
+      onClosed: vi.fn(),
+      onError: vi.fn(),
+      onEvent: vi.fn(),
+    });
+
+    const connectConfig = connectMock.mock.calls[0]?.[0];
+    const instruction =
+      connectConfig?.config?.systemInstruction?.parts?.[0]?.text;
+
+    expect(instruction).toContain(
+      "James is your assistant name, not a family member or calendar owner.",
+    );
   });
 });

@@ -15,5 +15,12 @@
     -->
     <key>com.apple.security.device.audio-input</key>
     <true/>
+    <!--
+      Required so the hardened-runtime app may send Apple events (Automation) to
+      Calendar.app and Reminders.app for the dashboard. Without this the
+      AppleScript bridge is blocked before the "control" TCC prompt can appear.
+    -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
   </dict>
 </plist>
