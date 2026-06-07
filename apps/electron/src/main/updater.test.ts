@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createUpdaterController,
+  registerUpdaterIpc,
   type UpdaterAdapter,
   type UpdaterBroadcaster,
 } from "./updater";
@@ -91,6 +92,22 @@ describe("createUpdaterController", () => {
     ]);
   });
 
+  it("does not install before an update is downloaded", async () => {
+    const updater = new FakeUpdater();
+    const broadcaster = createBroadcaster();
+    const controller = createUpdaterController({
+      broadcaster,
+      isPackaged: true,
+      updater,
+    });
+
+    await controller.installNow();
+    updater.emit("update-available", { version: "0.1.1" });
+    await controller.installNow();
+
+    expect(updater.quitAndInstall).not.toHaveBeenCalled();
+  });
+
   it("stores updater errors without throwing", () => {
     const updater = new FakeUpdater();
     const broadcaster = createBroadcaster();
@@ -106,5 +123,80 @@ describe("createUpdaterController", () => {
       error: "network failed",
       state: "error",
     });
+  });
+});
+
+describe("registerUpdaterIpc", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  it("registers updater ipc handlers", async () => {
+    const updater = new FakeUpdater();
+    const handlers = new Map<string, () => unknown>();
+    const ipc = {
+      handle: vi.fn((channel: string, handler: () => unknown) => {
+        handlers.set(channel, handler);
+      }),
+    };
+
+    registerUpdaterIpc({
+      appIsPackaged: true,
+      getAllWindows: () => [],
+      ipc,
+      updater,
+    });
+
+    expect([...handlers.keys()]).toEqual([
+      "updater:getStatus",
+      "updater:check",
+      "updater:install",
+    ]);
+    expect(ipc.handle).toHaveBeenCalledTimes(3);
+
+    expect(handlers.get("updater:getStatus")?.()).toMatchObject({
+      state: "idle",
+    });
+    await handlers.get("updater:check")?.();
+    await handlers.get("updater:install")?.();
+
+    expect(updater.checkForUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it("broadcasts updater status only to non-destroyed windows", () => {
+    const updater = new FakeUpdater();
+    const sendActive = vi.fn();
+    const sendDestroyed = vi.fn();
+    const ipc = {
+      handle: vi.fn(),
+    };
+
+    registerUpdaterIpc({
+      appIsPackaged: true,
+      getAllWindows: () => [
+        {
+          webContents: {
+            isDestroyed: () => false,
+            send: sendActive,
+          },
+        },
+        {
+          webContents: {
+            isDestroyed: () => true,
+            send: sendDestroyed,
+          },
+        },
+      ],
+      ipc,
+      updater,
+    });
+
+    updater.emit("update-downloaded", { version: "0.1.1" });
+
+    expect(sendActive).toHaveBeenCalledWith("updater:status", {
+      state: "downloaded",
+      version: "0.1.1",
+    });
+    expect(sendDestroyed).not.toHaveBeenCalled();
   });
 });

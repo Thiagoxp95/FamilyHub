@@ -38,6 +38,13 @@ export interface UpdaterController {
   start: () => Promise<void>;
 }
 
+export interface UpdaterWindow {
+  webContents: {
+    isDestroyed: () => boolean;
+    send: (channel: string, payload: unknown) => void;
+  };
+}
+
 export function createUpdaterController({
   broadcaster,
   isPackaged,
@@ -62,7 +69,10 @@ export function createUpdaterController({
       : undefined;
   }
 
-  function withVersion(state: UpdateState, version: string | undefined): UpdaterStatus {
+  function withVersion(
+    state: UpdateState,
+    version: string | undefined,
+  ): UpdaterStatus {
     return version === undefined ? { state } : { state, version };
   }
 
@@ -140,15 +150,19 @@ export function createUpdaterController({
 
 export function registerUpdaterIpc({
   appIsPackaged,
+  getAllWindows = () => BrowserWindow.getAllWindows(),
   ipc = ipcMain,
+  updater = autoUpdater as unknown as UpdaterAdapter,
 }: {
   appIsPackaged: boolean;
+  getAllWindows?: () => UpdaterWindow[];
   ipc?: Pick<IpcMain, "handle">;
+  updater?: UpdaterAdapter;
 }): UpdaterController {
   const controller = createUpdaterController({
     broadcaster: {
       broadcast(channel, payload) {
-        for (const window of BrowserWindow.getAllWindows()) {
+        for (const window of getAllWindows()) {
           if (!window.webContents.isDestroyed()) {
             window.webContents.send(channel, payload);
           }
@@ -156,7 +170,7 @@ export function registerUpdaterIpc({
       },
     },
     isPackaged: appIsPackaged,
-    updater: autoUpdater as unknown as UpdaterAdapter,
+    updater,
   });
 
   ipc.handle("updater:getStatus", () => controller.getStatus());
