@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { base64ToInt16, convertFloatSamplesToLinear16, int16ToBase64 } from "./audioClip";
 import { CalendarPanel } from "./CalendarPanel";
 import { RemindersPanel } from "./RemindersPanel";
 import { WeatherPanel } from "./WeatherPanel";
@@ -584,50 +585,6 @@ function createAudioPlayer(): AudioPlayer {
 function parseSampleRate(mimeType: string): number {
   const match = /rate=(\d+)/.exec(mimeType);
   return match ? Number(match[1]) : 24000;
-}
-
-function base64ToInt16(base64: string): Int16Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-
-  return new Int16Array(
-    bytes.buffer,
-    bytes.byteOffset,
-    Math.floor(bytes.byteLength / 2),
-  );
-}
-
-function int16ToBase64(samples: Int16Array): string {
-  const bytes = new Uint8Array(
-    samples.buffer,
-    samples.byteOffset,
-    samples.byteLength,
-  );
-  let binary = "";
-  const chunkSize = 0x8000;
-
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    const slice = bytes.subarray(index, index + chunkSize);
-    binary += String.fromCharCode(...slice);
-  }
-
-  return btoa(binary);
-}
-
-function convertFloatSamplesToLinear16(samples: number[]): Int16Array {
-  const pcm = new Int16Array(samples.length);
-
-  for (const [index, sample] of samples.entries()) {
-    const clampedSample = Math.max(-1, Math.min(1, sample));
-    pcm[index] =
-      clampedSample < 0 ? clampedSample * 0x8000 : clampedSample * 0x7fff;
-  }
-
-  return pcm;
 }
 
 export function calculateMicrophoneLevel(samples: Float32Array): number {
