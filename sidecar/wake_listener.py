@@ -44,6 +44,30 @@ def emit(message):
     sys.stdout.flush()
 
 
+def phrase_confirmed(words, phrase_tokens, min_confidence):
+    """True iff `phrase_tokens` appear as a contiguous, in-order run within
+    Vosk's result `words`, each with conf >= min_confidence.
+
+    `words` is Vosk's result list: [{"word": str, "conf": float, ...}, ...].
+    `phrase_tokens` is a lowercased token list, e.g. ["hey", "james"].
+    """
+    n = len(phrase_tokens)
+    if n == 0:
+        return False
+    spoken = [
+        (str(entry.get("word", "")).lower(), float(entry.get("conf", 0.0)))
+        for entry in words
+    ]
+    for i in range(len(spoken) - n + 1):
+        window = spoken[i : i + n]
+        if all(
+            word == token and conf >= min_confidence
+            for (word, conf), token in zip(window, phrase_tokens)
+        ):
+            return True
+    return False
+
+
 class LivekitEngine:
     """livekit-wakeword ONNX classifier over a trailing 2 s window."""
 
