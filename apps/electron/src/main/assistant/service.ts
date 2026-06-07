@@ -1,9 +1,11 @@
 import { readAssistantConfigStatus } from "./config";
 import { evaluateWakeSessionTurn, isSessionEndCommand } from "./gating";
+import { EnrollmentStore } from "./enrollmentStore";
 import type { FileSpeakerProfileStore } from "./profileStore";
 import type {
   AssistantEvent,
   AssistantSnapshot,
+  EnrolledSpeaker,
   SessionSpeakerGateDecision,
   SpeakerProfileSummary,
 } from "./types";
@@ -15,6 +17,7 @@ export interface GeminiLiveAdapter {
 interface AssistantServiceOptions {
   gemini: GeminiLiveAdapter;
   profileStore: FileSpeakerProfileStore;
+  enrollmentStore?: EnrollmentStore;
 }
 
 interface SubmitTranscriptTurnInput {
@@ -44,6 +47,7 @@ const displayWakePhrase = "James";
 export class AssistantService {
   private readonly gemini: GeminiLiveAdapter;
   private readonly profileStore: FileSpeakerProfileStore;
+  private readonly enrollmentStore: EnrollmentStore | null;
   private currentSpeakerName: string | null = null;
   private events: AssistantEvent[] = [];
   private isListening = false;
@@ -53,9 +57,10 @@ export class AssistantService {
   private lockedSpeakerLabel: string | null = null;
   private sessionExpiresAtMs: number | null = null;
 
-  constructor({ gemini, profileStore }: AssistantServiceOptions) {
+  constructor({ gemini, profileStore, enrollmentStore }: AssistantServiceOptions) {
     this.gemini = gemini;
     this.profileStore = profileStore;
+    this.enrollmentStore = enrollmentStore ?? null;
   }
 
   async listSpeakers(): Promise<SpeakerProfileSummary[]> {
@@ -96,10 +101,43 @@ export class AssistantService {
         this.clearSessionLock();
       }
 
+      if (this.enrollmentStore) {
+        await this.enrollmentStore.deleteSpeakerClips(speakerId);
+      }
+
       this.pushEvent("info", "Deleted speaker.");
     }
 
     return deleted;
+  }
+
+  private async listEnrolledSpeakers(): Promise<EnrolledSpeaker[]> {
+    const speakers = await this.profileStore.list();
+    return Promise.all(
+      speakers.map(async (speaker) => ({
+        ...speaker,
+        sampleCount: this.enrollmentStore
+          ? await this.enrollmentStore.countClips(speaker.id)
+          : 0,
+      })),
+    );
+  }
+
+  async saveEnrollmentClip(
+    speakerId: string,
+    audioBase64: string,
+  ): Promise<{ sampleCount: number }> {
+    if (!this.enrollmentStore) {
+      throw new Error("Enrollment storage is unavailable.");
+    }
+    const bytes = Buffer.from(audioBase64, "base64");
+    const samples = new Int16Array(
+      bytes.buffer,
+      bytes.byteOffset,
+      Math.floor(bytes.byteLength / 2),
+    );
+    const sampleCount = await this.enrollmentStore.saveClip(speakerId, samples);
+    return { sampleCount };
   }
 
   async startListening(): Promise<AssistantSnapshot> {
@@ -292,7 +330,7 @@ export class AssistantService {
         ? new Date(this.sessionExpiresAtMs).toISOString()
         : null,
       wakePhrase: displayWakePhrase,
-      speakers: await this.profileStore.list(),
+      speakers: await this.listEnrolledSpeakers(),
     };
   }
 

@@ -5,6 +5,10 @@ export interface SpeakerProfileSummary {
   name: string;
 }
 
+export interface EnrolledSpeaker extends SpeakerProfileSummary {
+  sampleCount: number;
+}
+
 export type SessionSpeakerGateDecision =
   | {
       accepted: true;
@@ -59,5 +63,5 @@ export interface AssistantSnapshot {
   lockedSpeakerLabel: string | null;
   sessionExpiresAt: string | null;
   wakePhrase: string;
-  speakers: SpeakerProfileSummary[];
+  speakers: EnrolledSpeaker[];
 }

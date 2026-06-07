@@ -3,8 +3,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { beforeEach, describe, expect, it } from "vitest";
 import { readAssistantConfigStatus } from "./config";
+import { EnrollmentStore } from "./enrollmentStore";
 import { FileSpeakerProfileStore } from "./profileStore";
-import { AssistantService, type GeminiLiveAdapter } from "./service";
+import { AssistantService, PlaceholderGeminiLive, type GeminiLiveAdapter } from "./service";
 
 class FakeGemini implements GeminiLiveAdapter {
   prompts: string[] = [];
@@ -180,5 +181,42 @@ describe("AssistantService", () => {
       lockedSpeakerLabel: null,
     });
     expect(gemini.prompts).toEqual([]);
+  });
+});
+
+describe("enrollment clips", () => {
+  it("saves a clip and reports sampleCount in the snapshot", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fh-svc-"));
+    const service = new AssistantService({
+      gemini: new PlaceholderGeminiLive(),
+      profileStore: new FileSpeakerProfileStore(dir),
+      enrollmentStore: new EnrollmentStore(dir),
+    });
+    const speaker = await service.enrollSpeaker("Mom");
+
+    const b64 = Buffer.from(new Int16Array([7, -7]).buffer).toString("base64");
+    expect(await service.saveEnrollmentClip(speaker.id, b64)).toEqual({
+      sampleCount: 1,
+    });
+
+    const snap = await service.getSnapshot();
+    const mom = snap.speakers.find((s) => s.id === speaker.id);
+    expect(mom?.sampleCount).toBe(1);
+  });
+
+  it("removes clips when the speaker is deleted", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fh-svc-"));
+    const enrollmentStore = new EnrollmentStore(dir);
+    const service = new AssistantService({
+      gemini: new PlaceholderGeminiLive(),
+      profileStore: new FileSpeakerProfileStore(dir),
+      enrollmentStore,
+    });
+    const speaker = await service.enrollSpeaker("Kid");
+    const b64 = Buffer.from(new Int16Array([1]).buffer).toString("base64");
+    await service.saveEnrollmentClip(speaker.id, b64);
+
+    await service.deleteSpeaker(speaker.id);
+    expect(await enrollmentStore.countClips(speaker.id)).toBe(0);
   });
 });
