@@ -121,6 +121,16 @@ export function resolveGateScript(): string | null {
   );
 }
 
+export function resolveSpeakerEmbedScript(): string | null {
+  if (process.env.FAMILYHUB_EMBED_SCRIPT) {
+    return process.env.FAMILYHUB_EMBED_SCRIPT;
+  }
+
+  return firstExisting(
+    sidecarRoots().map((root) => resolve(root, "speaker_embed.py")),
+  );
+}
+
 function sidecarRoots(): string[] {
   const roots = [
     resolve(process.cwd(), "sidecar"),
