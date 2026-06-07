@@ -360,6 +360,9 @@ export class LiveController {
       result = { ok: false, error: readErrorMessage(error) };
     }
 
+    // Surface the tool call + outcome in the activity log for debugging.
+    this.sink.noteInfo(`🛠 ${name}: ${summarizeToolResult(result)}`);
+
     // The session may have ended while the tool ran.
     this.session?.sendToolResponse(id, name, result);
     this.sink.emitSnapshot();
@@ -399,4 +402,17 @@ function readErrorMessage(error: unknown): string {
   }
 
   return "Unexpected error.";
+}
+
+function summarizeToolResult(result: Record<string, unknown>): string {
+  if (result.ok === false) {
+    return `error: ${typeof result.error === "string" ? result.error : "unknown"}`;
+  }
+  if (Array.isArray(result.events)) {
+    return `${result.events.length} event(s)`;
+  }
+  if (Array.isArray(result.reminders)) {
+    return `${result.reminders.length} reminder(s)`;
+  }
+  return "ok";
 }
