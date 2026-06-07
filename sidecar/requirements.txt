@@ -1,5 +1,8 @@
-# Dedicated wake-word spotter. Vosk is a lightweight offline speech recognizer
-# (no PyTorch); constrained to a keyword grammar it reliably spots an isolated
-# wake word, which a context-hungry ASR drops. numpy is only used by selftest.py.
+# Wake-word spotter engines. Both are lightweight and torch-free at runtime:
+#   livekit-wakeword (default) — custom ONNX "James" model + bundled feature
+#     models; onnxruntime only.
+#   vosk (fallback engine) — offline ASR constrained to a keyword grammar.
+# numpy is used by the livekit engine and selftest.py.
+livekit-wakeword
 vosk
 numpy
