@@ -75,13 +75,13 @@ def main():
     )
     args = parser.parse_args()
 
-    extractor = so.SpeakerEmbeddingExtractor(
-        so.SpeakerEmbeddingExtractorConfig(
-            model=args.embedder, num_threads=1, provider="cpu"
-        )
-    )
+    from speaker_embed import embed as embed_samples, load_extractor
+
+    extractor = load_extractor(args.embedder)
+    family = []  # list[(speaker_id, np.ndarray)] loaded via {"cmd":"load"}
 
     def new_vad():
+        import sherpa_onnx as so
         cfg = so.VadModelConfig()
         cfg.silero_vad.model = args.vad
         cfg.silero_vad.threshold = 0.5
@@ -91,35 +91,28 @@ def main():
         cfg.sample_rate = SAMPLE_RATE
         return so.VoiceActivityDetector(cfg, buffer_size_in_seconds=60)
 
-    def embed(samples):
-        stream = extractor.create_stream()
-        stream.accept_waveform(SAMPLE_RATE, samples)
-        stream.input_finished()
-        vec = np.array(extractor.compute(stream), dtype=np.float32)
-        norm = float(np.linalg.norm(vec))
-        return vec / norm if norm > 0 else vec
-
     vad = new_vad()
-    reference = None  # enrolled speaker embedding
+    reference = None
+    locked_id = None
     leftover = np.zeros(0, dtype=np.float32)
 
     def handle_segment(samples):
-        nonlocal reference
-        vec = embed(samples)
+        nonlocal reference, locked_id
+        vec = embed_samples(extractor, samples)
         pcm16 = (np.clip(samples, -1, 1) * 32767).astype(np.int16)
         audio_b64 = base64.b64encode(pcm16.tobytes()).decode()
 
-        if reference is None:
-            reference = vec
-            emit({"type": "enrolled"})
+        verdict, info = decide(family, reference, vec, args.threshold)
+        if verdict == "forward":
             emit({"type": "forward", "audio": audio_b64, "score": 1.0})
-            return
-
-        score = round(float(np.dot(reference, vec)), 3)
-        if score >= args.threshold:
-            emit({"type": "forward", "audio": audio_b64, "score": score})
-        else:
-            emit({"type": "dropped", "score": score})
+        elif verdict == "lock":
+            reference = vec
+            locked_id = info
+            emit({"type": "forward", "audio": audio_b64, "score": 1.0, "speakerId": info})
+        elif verdict == "rejected":
+            emit({"type": "rejected", "score": round(info, 3)})
+        else:  # drop
+            emit({"type": "dropped", "score": round(float(np.dot(reference, vec)), 3)})
 
     emit({"type": "ready"})
     print("speaker gate ready", file=sys.stderr, flush=True)
@@ -137,10 +130,18 @@ def main():
                 command = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if command.get("cmd") == "reset":
+            cmd = command.get("cmd")
+            if cmd == "reset":
                 vad = new_vad()
                 reference = None
+                locked_id = None
                 leftover = np.zeros(0, dtype=np.float32)
+            elif cmd == "load":
+                family = [
+                    (s["id"], np.asarray(s["vec"], dtype=np.float32))
+                    for s in command.get("speakers", [])
+                    if isinstance(s.get("vec"), list)
+                ]
             continue
 
         try:
