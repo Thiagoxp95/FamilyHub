@@ -42,7 +42,7 @@ export type TranscriptTurnResult =
 const maxEvents = 20;
 const sessionDurationMs = 60_000;
 const wakePhrases = ["james"];
-const displayWakePhrase = "James";
+const displayWakePhrase = "Hey James";
 
 export class AssistantService {
   private readonly gemini: GeminiLiveAdapter;

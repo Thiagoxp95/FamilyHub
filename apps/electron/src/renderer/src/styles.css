@@ -934,4 +934,15 @@ button:disabled {
 .family-count.complete { color: #8ae6a1; }
 .enroll-prompt { font-size: 1.6rem; }
 .enroll-error { color: #ff8a8a; }
-.setup-button { background: none; border: none; font-size: 1.3rem; cursor: pointer; }
+.setup-button {
+  background: #1f2937;
+  color: #f4f6fb;
+  border: none;
+  border-radius: 999px;
+  padding: 0.45rem 0.95rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.setup-button:hover { background: #374151; }

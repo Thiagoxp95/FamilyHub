@@ -19,7 +19,7 @@ const emptySnapshot: AssistantSnapshot = {
   lockedSpeakerLabel: null,
   sessionExpiresAt: null,
   speakers: [],
-  wakePhrase: "James",
+  wakePhrase: "Hey James",
 };
 
 // Mic capture + Gemini Live both use 16 kHz LINEAR16 mono.
@@ -196,7 +196,7 @@ export function App(): React.JSX.Element {
       : `Waiting for "${snapshot.wakePhrase}"`;
   const sessionDetail = sessionActive
     ? liveStatus || "Listening…"
-    : 'Say "James" to start talking';
+    : `Say "${snapshot.wakePhrase}" to start talking`;
   const heardText = sessionActive
     ? liveInput || "Listening…"
     : (snapshot.lastTranscript ?? "Nothing yet");
@@ -253,9 +253,8 @@ export function App(): React.JSX.Element {
             type="button"
             className="setup-button"
             onClick={() => setShowSetup(true)}
-            aria-label="Family setup"
           >
-            ⚙
+            👪 Family setup
           </button>
         </div>
       </header>
