@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { base64ToInt16, convertFloatSamplesToLinear16, int16ToBase64 } from "./audioClip";
 import { CalendarPanel } from "./CalendarPanel";
+import { FamilySetup } from "./FamilySetup";
 import { RemindersPanel } from "./RemindersPanel";
 import { WeatherPanel } from "./WeatherPanel";
 
@@ -31,6 +32,7 @@ export function App(): React.JSX.Element {
   const [micLevel, setMicLevel] = useState(0);
   const [micStatus, setMicStatus] = useState("Requesting microphone...");
   const [snapshot, setSnapshot] = useState<AssistantSnapshot>(emptySnapshot);
+  const [showSetup, setShowSetup] = useState(false);
   const [liveMode, setLiveMode] = useState<LiveMode>("wake");
   const [liveStatus, setLiveStatus] = useState("");
   const [liveInput, setLiveInput] = useState("");
@@ -145,6 +147,16 @@ export function App(): React.JSX.Element {
     };
   }, []);
 
+  useEffect(() => {
+    if (showSetup) {
+      void window.familyHub.assistant.stopListening();
+      return () => {
+        void window.familyHub.assistant.startListening();
+      };
+    }
+    return undefined;
+  }, [showSetup]);
+
   // Tick an elapsed-seconds counter while the local model is loading, so a long
   // first-run download reads differently from a fast cached start.
   useEffect(() => {
@@ -237,6 +249,14 @@ export function App(): React.JSX.Element {
               End conversation
             </button>
           ) : null}
+          <button
+            type="button"
+            className="setup-button"
+            onClick={() => setShowSetup(true)}
+            aria-label="Family setup"
+          >
+            ⚙
+          </button>
         </div>
       </header>
 
@@ -339,6 +359,15 @@ export function App(): React.JSX.Element {
           ) : null}
         </div>
       </details>
+
+      {showSetup && (
+        <div className="setup-overlay">
+          <FamilySetup
+            speakers={snapshot.speakers}
+            onClose={() => setShowSetup(false)}
+          />
+        </div>
+      )}
     </div>
   );
 }
