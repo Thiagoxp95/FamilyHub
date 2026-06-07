@@ -14,10 +14,12 @@ import {
 } from "./liveController";
 import {
   WakeWordSidecar,
+  resolveGateScript,
   resolveSidecarPython,
   resolveSidecarScript,
   type LocalTranscriber,
 } from "./localTranscriber";
+import { SpeakerGate } from "./speakerGate";
 import { FileSpeakerProfileStore } from "./profileStore";
 import { AssistantService, PlaceholderGeminiLive } from "./service";
 import type { AssistantSnapshot } from "./types";
@@ -151,6 +153,7 @@ export function registerAssistantIpc(
 
   const sidecarPython = resolveSidecarPython();
   const sidecarScript = resolveSidecarScript();
+  const gateScript = resolveGateScript();
   const controller =
     geminiApiKey && sidecarPython && sidecarScript
       ? new LiveController({
@@ -162,6 +165,11 @@ export function registerAssistantIpc(
               systemInstruction: buildSystemInstruction(),
             }),
           runTool,
+          // Speaker hard-lock: only the invoker's voice reaches Gemini. Enabled
+          // when the gate sidecar resolves; otherwise the mic streams as-is.
+          ...(gateScript
+            ? { createGate: () => new SpeakerGate(sidecarPython, gateScript) }
+            : {}),
           sink,
         })
       : null;

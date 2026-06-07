@@ -32,5 +32,11 @@ if [ ! -d "models/${VOSK_MODEL}" ]; then
   (cd models && unzip -q "${VOSK_MODEL}.zip" && rm -f "${VOSK_MODEL}.zip")
 fi
 
-echo "Sidecar ready at $(pwd) (default engine: livekit / james.onnx)"
+# Speaker hard-lock gate models: silero VAD + a speaker-embedding model.
+VAD_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
+EMB_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/nemo_en_titanet_small.onnx"
+[ -f models/silero_vad.onnx ] || { echo "Downloading silero VAD…"; curl -sL -o models/silero_vad.onnx "$VAD_URL"; }
+[ -f models/nemo_en_titanet_small.onnx ] || { echo "Downloading speaker-embedding model (~40 MB)…"; curl -sL -o models/nemo_en_titanet_small.onnx "$EMB_URL"; }
+
+echo "Sidecar ready at $(pwd) (default engine: livekit / james.onnx; speaker lock: on)"
 echo "Verify with: ./.venv/bin/python selftest.py"

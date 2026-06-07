@@ -1,8 +1,9 @@
-# Wake-word spotter engines. Both are lightweight and torch-free at runtime:
-#   livekit-wakeword (default) — custom ONNX "James" model + bundled feature
-#     models; onnxruntime only.
-#   vosk (fallback engine) — offline ASR constrained to a keyword grammar.
-# numpy is used by the livekit engine and selftest.py.
+# Wake-word + speaker-lock engines. All torch-free at runtime:
+#   livekit-wakeword (default wake engine) — custom ONNX "James" model.
+#   vosk (fallback wake engine) — offline ASR constrained to a keyword grammar.
+#   sherpa-onnx — silero VAD + speaker-embedding for the speaker hard-lock gate.
+# numpy is used by the livekit engine, the gate, and selftest.py.
 livekit-wakeword
 vosk
+sherpa-onnx
 numpy

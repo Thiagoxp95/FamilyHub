@@ -10,6 +10,7 @@ import {
 } from "./listenerMachine";
 import { endConversationToolName, type LiveEvent, type LiveSessionHandlers } from "./liveSession";
 import type { LocalTranscriber } from "./localTranscriber";
+import type { SpeakerGateLike } from "./speakerGate";
 
 // The subset of GeminiLiveSession the controller depends on (so tests can fake
 // it without a websocket).
@@ -52,6 +53,8 @@ export interface LiveControllerOptions {
   createSession: () => LiveSessionLike;
   sink: LiveControllerSink;
   runTool?: ToolRunner;
+  // Optional speaker hard-lock: enroll the invoker and forward only their voice.
+  createGate?: () => SpeakerGateLike;
   wakePhrases?: string[];
   config?: ListenerConfig;
   idleTimeoutMs?: number;
@@ -65,6 +68,8 @@ export class LiveController {
   private readonly createSession: () => LiveSessionLike;
   private readonly sink: LiveControllerSink;
   private readonly runTool: ToolRunner | null;
+  private readonly createGate: (() => SpeakerGateLike) | null;
+  private gate: SpeakerGateLike | null = null;
   private readonly wakePhrases: string[];
   private readonly config: ListenerConfig;
   private readonly idleTimeoutMs: number;
@@ -87,6 +92,7 @@ export class LiveController {
     this.createSession = options.createSession;
     this.sink = options.sink;
     this.runTool = options.runTool ?? null;
+    this.createGate = options.createGate ?? null;
     this.wakePhrases = options.wakePhrases ?? defaultWakePhrases;
     this.config = options.config ?? defaultListenerConfig;
     this.idleTimeoutMs = options.idleTimeoutMs ?? defaultIdleTimeoutMs;
@@ -129,6 +135,18 @@ export class LiveController {
 
     this.sink.sendLive({ type: "listener", state: "loading" });
     transcriber.reset();
+
+    if (this.createGate) {
+      this.gate = this.createGate();
+      await this.gate.start({
+        onForward: (audio) => this.session?.sendAudioFrame(audio),
+        onDecision: (decision) => {
+          if (decision.type === "dropped") {
+            this.sink.noteInfo(`🔇 ignored a different voice (${decision.score ?? "?"})`);
+          }
+        },
+      });
+    }
   }
 
   handleFrame(frame: string): void {
@@ -151,8 +169,10 @@ export class LiveController {
     this.pendingReason = "stopped";
     this.apply({ type: "stop" });
     const transcriber = this.transcriber;
+    const gate = this.gate;
     this.transcriber = null;
-    await transcriber?.stop();
+    this.gate = null;
+    await Promise.all([transcriber?.stop(), gate?.stop()]);
   }
 
   private handleTranscript(text: string): void {
@@ -190,7 +210,13 @@ export class LiveController {
         break;
       case "sendFrames":
         for (const frame of effect.frames) {
-          this.session?.sendAudioFrame(frame);
+          if (this.gate) {
+            // Route live audio through the speaker gate; it forwards only the
+            // locked speaker's utterances to the session (via onForward).
+            this.gate.feed(frame);
+          } else {
+            this.session?.sendAudioFrame(frame);
+          }
         }
         break;
       case "closeSession":
@@ -207,6 +233,7 @@ export class LiveController {
     this.pendingReason = null;
     this.inputTurnBuffer = "";
     this.outputTurnBuffer = "";
+    this.gate?.reset(); // new session → re-enroll the next speaker
     this.sink.sendLive({ type: "status", message: "Connecting…" });
 
     try {
@@ -259,6 +286,7 @@ export class LiveController {
     }
 
     this.transcriber?.reset();
+    this.gate?.reset();
     this.sink.noteInfo(`Live session ended (${effectiveReason}).`);
     this.sink.sendLive({
       type: "status",

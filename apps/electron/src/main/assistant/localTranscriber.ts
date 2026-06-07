@@ -111,6 +111,16 @@ export function resolveSidecarScript(): string | null {
   );
 }
 
+export function resolveGateScript(): string | null {
+  if (process.env.FAMILYHUB_GATE_SCRIPT) {
+    return process.env.FAMILYHUB_GATE_SCRIPT;
+  }
+
+  return firstExisting(
+    sidecarRoots().map((root) => resolve(root, "speaker_gate.py")),
+  );
+}
+
 function sidecarRoots(): string[] {
   const roots = [
     resolve(process.cwd(), "sidecar"),
