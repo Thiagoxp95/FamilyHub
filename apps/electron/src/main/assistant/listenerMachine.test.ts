@@ -3,16 +3,24 @@ import {
   createListenerState,
   defaultListenerConfig,
   reduceListener,
+  type ListenerConfig,
   type ListenerEffect,
   type ListenerEvent,
   type ListenerState,
 } from "./listenerMachine";
 
+// Config with the (optional) buffer-across-connect path enabled.
+const buffering: ListenerConfig = {
+  maxPrerollFrames: 24,
+  maxQueueFrames: 250,
+  bufferAcrossConnect: true,
+};
+
 // Drives a sequence of events through the reducer, returning the final state
 // and the flat list of every frame handed to "sendFrames", in emission order.
 function run(
   events: ListenerEvent[],
-  config = defaultListenerConfig,
+  config: ListenerConfig = buffering,
 ): { state: ListenerState; sent: string[]; effects: ListenerEffect[] } {
   let state = createListenerState();
   const sent: string[] = [];
@@ -34,7 +42,7 @@ function run(
   return { state, sent, effects };
 }
 
-describe("reduceListener", () => {
+describe("reduceListener with bufferAcrossConnect enabled", () => {
   it("buffers idle frames into the pre-roll without sending", () => {
     const { state, sent } = run([
       { type: "frame", frame: "p1" },
@@ -53,7 +61,7 @@ describe("reduceListener", () => {
         { type: "frame", frame: "p2" },
         { type: "frame", frame: "p3" },
       ],
-      { maxPrerollFrames: 2, maxQueueFrames: 100 },
+      { ...buffering, maxPrerollFrames: 2, maxQueueFrames: 100 },
     );
 
     expect(state.preRoll).toEqual(["p2", "p3"]);
@@ -99,7 +107,7 @@ describe("reduceListener", () => {
         { type: "frame", frame: "c3" },
         { type: "sessionOpen" },
       ],
-      { maxPrerollFrames: 10, maxQueueFrames: 2 },
+      { ...buffering, maxPrerollFrames: 10, maxQueueFrames: 2 },
     );
 
     expect(sent).toEqual(["c2", "c3"]);
@@ -139,6 +147,56 @@ describe("reduceListener", () => {
 
     expect(effects).toContainEqual({ type: "closeSession" });
     expect(sent).toEqual([]); // "late" must not be streamed
+    expect(state.phase).toBe("idle");
+  });
+});
+
+describe("reduceListener with bufferAcrossConnect disabled (default)", () => {
+  it("does not buffer idle frames into the pre-roll", () => {
+    const { state, sent } = run(
+      [
+        { type: "frame", frame: "p1" },
+        { type: "frame", frame: "p2" },
+      ],
+      defaultListenerConfig,
+    );
+
+    expect(state.preRoll).toEqual([]);
+    expect(sent).toEqual([]);
+  });
+
+  it("does not replay pre-roll or during-connect audio on open; streams only live frames", () => {
+    const { state, sent } = run(
+      [
+        { type: "frame", frame: "p1" }, // before wake — dropped
+        { type: "wake" },
+        { type: "frame", frame: "c1" }, // during connect — dropped
+        { type: "frame", frame: "c2" },
+        { type: "sessionOpen" }, // nothing flushed
+        { type: "frame", frame: "l1" }, // live — streamed
+        { type: "frame", frame: "l2" },
+      ],
+      defaultListenerConfig,
+    );
+
+    expect(state.phase).toBe("live");
+    expect(state.queue).toEqual([]);
+    expect(sent).toEqual(["l1", "l2"]); // only post-open audio
+  });
+
+  it("still connects on wake and tears down on stop", () => {
+    const { effects, state } = run(
+      [
+        { type: "wake" },
+        { type: "sessionOpen" },
+        { type: "stop" },
+        { type: "sessionClosed" },
+      ],
+      defaultListenerConfig,
+    );
+
+    expect(effects).toContainEqual({ type: "connect" });
+    expect(effects).toContainEqual({ type: "closeSession" });
     expect(state.phase).toBe("idle");
   });
 });

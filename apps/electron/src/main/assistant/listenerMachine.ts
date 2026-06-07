@@ -1,13 +1,15 @@
 // Pure, side-effect-free model of the wake → connect → live handoff.
 //
-// The renderer streams every mic frame to the main process continuously. While
-// idle we keep a bounded rolling pre-roll so that the words spoken immediately
-// after "James" — before the local ASR has finished recognising the wake word —
-// are not lost. On wake we seed a flush queue from the pre-roll and keep
-// appending frames while Gemini Live connects. When the socket opens we flush
-// the whole queue once, in order, then stream subsequent frames straight
-// through. Because no frame is ever sent before the socket opens, delivery is
-// exactly-once with no fuzzy de-duplication required.
+// The renderer streams every mic frame to the main process continuously. On wake
+// we open the Gemini Live session and, once the socket is open, stream live
+// frames straight through.
+//
+// `bufferAcrossConnect` (OFF by default) optionally captures a rolling pre-roll
+// plus the frames spoken while connecting and flushes them into the session on
+// open. That let the user "say James and keep talking" without losing audio
+// during connect — but replaying that burst confused Gemini's turn-taking and
+// interrupted its reply, so it is disabled. With it off, no frame is buffered or
+// replayed; the session only ever receives audio that arrives after it opens.
 
 export type ListenerPhase = "idle" | "connecting" | "live" | "closing";
 
@@ -33,13 +35,19 @@ export type ListenerEffect =
 export interface ListenerConfig {
   maxPrerollFrames: number;
   maxQueueFrames: number;
+  // When false (default), audio is NOT buffered across the connect: the session
+  // streams only frames received after the socket opens. When true, pre-roll +
+  // during-connect frames are flushed into the session on open.
+  bufferAcrossConnect: boolean;
 }
 
 // At the renderer's ~120 ms frame cadence, 24 frames ≈ 3 s of pre-roll and
-// 250 frames ≈ 30 s of buffered audio across a slow connect.
+// 250 frames ≈ 30 s of buffered audio across a slow connect (only used when
+// bufferAcrossConnect is enabled).
 export const defaultListenerConfig: ListenerConfig = {
   maxPrerollFrames: 24,
   maxQueueFrames: 250,
+  bufferAcrossConnect: false,
 };
 
 export function createListenerState(): ListenerState {
@@ -59,6 +67,10 @@ export function reduceListener(
   switch (state.phase) {
     case "idle":
       if (event.type === "frame") {
+        if (!config.bufferAcrossConnect) {
+          return { state, effects: [] };
+        }
+
         return {
           state: {
             ...state,
@@ -70,7 +82,12 @@ export function reduceListener(
 
       if (event.type === "wake") {
         return {
-          state: { ...state, phase: "connecting", queue: state.preRoll, preRoll: [] },
+          state: {
+            ...state,
+            phase: "connecting",
+            queue: config.bufferAcrossConnect ? state.preRoll : [],
+            preRoll: [],
+          },
           effects: [{ type: "connect" }],
         };
       }
@@ -79,6 +96,10 @@ export function reduceListener(
 
     case "connecting":
       if (event.type === "frame") {
+        if (!config.bufferAcrossConnect) {
+          return { state, effects: [] };
+        }
+
         return {
           state: {
             ...state,

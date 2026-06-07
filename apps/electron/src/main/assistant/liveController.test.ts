@@ -79,25 +79,22 @@ async function setup() {
 }
 
 describe("LiveController", () => {
-  it("captures across connect and replays pre-roll + buffered + live frames once, in order", async () => {
-    const { controller, transcriber, sessions } = await setup();
+  it("streams only post-open audio to the session (no pre-roll/connect replay)", async () => {
+    const { controller, transcriber, sessions, sink } = await setup();
 
-    controller.handleFrame("p1"); // pre-roll
+    controller.handleFrame("p1"); // before wake — must NOT be replayed
     controller.handleFrame("p2");
-    transcriber.emit("james turn on the lights"); // wake → connect
+    transcriber.emit("james turn on the lights"); // wake → connect → open
 
-    await vi.waitFor(() => expect(sessions).toHaveLength(1));
+    // Wait until the session is actually open (mode flips to "live").
+    await vi.waitFor(() =>
+      expect(sink.live).toContainEqual({ type: "mode", mode: "live" }),
+    );
 
-    controller.handleFrame("c1"); // buffered during connect (or streamed if already open)
+    controller.handleFrame("l1"); // live — streamed
+    controller.handleFrame("l2");
 
-    // Simulate the socket opening: controller dispatches sessionOpen after
-    // session.start() resolves, which already happened in waitFor above. Frames
-    // sent after open stream straight through.
-    await vi.waitFor(() => expect(sessions[0]?.sentFrames.length).toBeGreaterThan(0));
-
-    controller.handleFrame("l1");
-
-    expect(sessions[0]?.sentFrames).toEqual(["p1", "p2", "c1", "l1"]);
+    expect(sessions[0]?.sentFrames).toEqual(["l1", "l2"]);
   });
 
   it("feeds every frame to the transcriber and resets it on start", async () => {
