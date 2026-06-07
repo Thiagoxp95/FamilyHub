@@ -43,4 +43,8 @@ export class EnrollmentStore {
   async deleteSpeakerClips(speakerId: string): Promise<void> {
     await rm(join(this.root, speakerId), { recursive: true, force: true });
   }
+
+  clipsDirOf(speakerId: string): string {
+    return this.clipsDir(speakerId);
+  }
 }

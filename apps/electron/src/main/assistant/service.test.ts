@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { chmod, mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -6,6 +6,7 @@ import { readAssistantConfigStatus } from "./config";
 import { EnrollmentStore } from "./enrollmentStore";
 import { FileSpeakerProfileStore } from "./profileStore";
 import { AssistantService, PlaceholderGeminiLive, type GeminiLiveAdapter } from "./service";
+import { VoiceprintStore } from "./voiceprintStore";
 
 class FakeGemini implements GeminiLiveAdapter {
   prompts: string[] = [];
@@ -218,5 +219,24 @@ describe("enrollment clips", () => {
 
     await service.deleteSpeaker(speaker.id);
     expect(await enrollmentStore.countClips(speaker.id)).toBe(0);
+  });
+
+  it("finalizeEnrollment computes a voiceprint and reports hasVoiceprint", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fh-svc-vp-"));
+    const fakePy = join(dir, "fakepy.sh");
+    await writeFile(fakePy, '#!/bin/sh\nprintf "[1, 0]"\n');
+    await chmod(fakePy, 0o755);
+    const service = new AssistantService({
+      gemini: new PlaceholderGeminiLive(),
+      profileStore: new FileSpeakerProfileStore(dir),
+      enrollmentStore: new EnrollmentStore(dir),
+      voiceprintStore: new VoiceprintStore(dir, fakePy, "x.py"),
+    });
+    const sp = await service.enrollSpeaker("Mom");
+    const b64 = Buffer.from(new Int16Array([1, 2]).buffer).toString("base64");
+    await service.saveEnrollmentClip(sp.id, b64);
+    await service.finalizeEnrollment(sp.id);
+    const snap = await service.getSnapshot();
+    expect(snap.speakers.find((s) => s.id === sp.id)?.hasVoiceprint).toBe(true);
   });
 });

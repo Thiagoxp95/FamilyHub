@@ -9,6 +9,7 @@ import type {
   SessionSpeakerGateDecision,
   SpeakerProfileSummary,
 } from "./types";
+import { VoiceprintStore } from "./voiceprintStore";
 
 export interface GeminiLiveAdapter {
   sendVerifiedTurn(prompt: string): Promise<string>;
@@ -18,6 +19,7 @@ interface AssistantServiceOptions {
   gemini: GeminiLiveAdapter;
   profileStore: FileSpeakerProfileStore;
   enrollmentStore?: EnrollmentStore;
+  voiceprintStore?: VoiceprintStore;
 }
 
 interface SubmitTranscriptTurnInput {
@@ -48,6 +50,7 @@ export class AssistantService {
   private readonly gemini: GeminiLiveAdapter;
   private readonly profileStore: FileSpeakerProfileStore;
   private readonly enrollmentStore: EnrollmentStore | null;
+  private readonly voiceprintStore: VoiceprintStore | null;
   private currentSpeakerName: string | null = null;
   private events: AssistantEvent[] = [];
   private isListening = false;
@@ -57,10 +60,11 @@ export class AssistantService {
   private lockedSpeakerLabel: string | null = null;
   private sessionExpiresAtMs: number | null = null;
 
-  constructor({ gemini, profileStore, enrollmentStore }: AssistantServiceOptions) {
+  constructor({ gemini, profileStore, enrollmentStore, voiceprintStore }: AssistantServiceOptions) {
     this.gemini = gemini;
     this.profileStore = profileStore;
     this.enrollmentStore = enrollmentStore ?? null;
+    this.voiceprintStore = voiceprintStore ?? null;
   }
 
   async listSpeakers(): Promise<SpeakerProfileSummary[]> {
@@ -105,6 +109,8 @@ export class AssistantService {
         await this.enrollmentStore.deleteSpeakerClips(speakerId);
       }
 
+      await this.voiceprintStore?.delete(speakerId);
+
       this.pushEvent("info", "Deleted speaker.");
     }
 
@@ -119,6 +125,9 @@ export class AssistantService {
         sampleCount: this.enrollmentStore
           ? await this.enrollmentStore.countClips(speaker.id)
           : 0,
+        hasVoiceprint: this.voiceprintStore
+          ? await this.voiceprintStore.has(speaker.id)
+          : false,
       })),
     );
   }
@@ -137,6 +146,17 @@ export class AssistantService {
     }
     const sampleCount = await this.enrollmentStore.saveClip(speakerId, samples);
     return { sampleCount };
+  }
+
+  async finalizeEnrollment(speakerId: string): Promise<void> {
+    if (!this.enrollmentStore || !this.voiceprintStore) return;
+    const clipsDir = this.enrollmentStore.clipsDirOf(speakerId);
+    if ((await this.enrollmentStore.countClips(speakerId)) === 0) return;
+    try {
+      await this.voiceprintStore.compute(speakerId, clipsDir);
+    } catch (error) {
+      this.pushEvent("error", `Voiceprint failed: ${String(error)}`);
+    }
   }
 
   async startListening(): Promise<AssistantSnapshot> {

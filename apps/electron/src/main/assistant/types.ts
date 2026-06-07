@@ -7,6 +7,7 @@ export interface SpeakerProfileSummary {
 
 export interface EnrolledSpeaker extends SpeakerProfileSummary {
   sampleCount: number;
+  hasVoiceprint: boolean;
 }
 
 export type SessionSpeakerGateDecision =
