@@ -146,31 +146,121 @@ class VoskEngine:
         return woke
 
 
+class TwoStageEngine:
+    """Stage 1: livekit james.onnx candidate (high recall). Stage 2: Vosk
+    re-decodes the trailing ring buffer against a tight 'hey james' grammar and
+    must confirm the phrase. A false wake needs BOTH stages wrong at once."""
+
+    FRAME = 1280  # 80 ms @ 16 kHz, matches LivekitEngine
+    RING_FRAMES = 38  # ~3.0 s trailing window (holds "hey" + pause + "james")
+
+    def __init__(self, model_path, threshold, vosk_model_path, phrase, min_confidence):
+        from vosk import Model, SetLogLevel
+
+        SetLogLevel(-1)
+        self.stage1 = LivekitEngine(model_path, threshold)
+        self.vosk_model = Model(vosk_model_path)
+        self.phrase = phrase
+        self.phrase_tokens = [t.lower() for t in phrase.split() if t]
+        self.min_conf = min_confidence
+        self.grammar = json.dumps([phrase, "[unk]"])
+        self.rejected = 0
+        self.reset()
+
+    def reset(self):
+        self.stage1.reset()
+        self.ring = deque(
+            [np.zeros(self.FRAME, dtype=np.int16)] * self.RING_FRAMES,
+            maxlen=self.RING_FRAMES,
+        )
+        self._leftover = np.zeros(0, dtype=np.int16)
+
+    def _push_ring(self, pcm_bytes):
+        chunk = np.frombuffer(pcm_bytes, dtype=np.int16)
+        self._leftover = np.concatenate([self._leftover, chunk])
+        while len(self._leftover) >= self.FRAME:
+            self.ring.append(self._leftover[: self.FRAME])
+            self._leftover = self._leftover[self.FRAME :]
+
+    def _confirm(self):
+        from vosk import KaldiRecognizer
+
+        rec = KaldiRecognizer(self.vosk_model, SAMPLE_RATE, self.grammar)
+        rec.SetWords(True)
+        audio = np.concatenate(list(self.ring)).astype(np.int16).tobytes()
+        rec.AcceptWaveform(audio)
+        result = json.loads(rec.FinalResult())
+        return phrase_confirmed(result.get("result", []), self.phrase_tokens, self.min_conf)
+
+    def feed(self, pcm_bytes):
+        self._push_ring(pcm_bytes)
+        if self.stage1.feed(pcm_bytes):  # Stage-1 candidate
+            if self._confirm():
+                return True
+            self.rejected += 1
+            print(
+                f"wake: stage-2 vetoed candidate (rejected={self.rejected})",
+                file=sys.stderr,
+                flush=True,
+            )
+        return False
+
+
 def build_engine(args, wake_words):
     if args.engine == "vosk":
         model = args.vosk_model or os.path.join(
             HERE, "models", "vosk-model-small-en-us-0.15"
         )
         return VoskEngine(model, wake_words, args.min_confidence), f"vosk:{model}"
+    if args.engine == "livekit":
+        model = args.model or os.environ.get(
+            "FAMILYHUB_WAKE_MODEL", os.path.join(HERE, "james.onnx")
+        )
+        return (
+            LivekitEngine(model, args.threshold),
+            f"livekit:{model}@{args.threshold}",
+        )
+    # twostage (default)
     model = args.model or os.environ.get(
         "FAMILYHUB_WAKE_MODEL", os.path.join(HERE, "james.onnx")
     )
-    return LivekitEngine(model, args.threshold), f"livekit:{model}@{args.threshold}"
+    vosk_model = args.vosk_model or os.environ.get(
+        "FAMILYHUB_VOSK_MODEL",
+        os.path.join(HERE, "models", "vosk-model-small-en-us-0.15"),
+    )
+    engine = TwoStageEngine(
+        model, args.threshold, vosk_model, args.wake_phrase, args.confirm_confidence
+    )
+    description = (
+        f"twostage:'{args.wake_phrase}' s1={args.threshold} "
+        f"s2={args.confirm_confidence}"
+    )
+    return engine, description
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--engine",
-        choices=["livekit", "vosk"],
-        default=os.environ.get("FAMILYHUB_WAKE_ENGINE", "livekit"),
+        choices=["twostage", "livekit", "vosk"],
+        default=os.environ.get("FAMILYHUB_WAKE_ENGINE", "twostage"),
     )
     parser.add_argument("--wake-words", default=DEFAULT_WAKE_WORDS)
     parser.add_argument("--model", default=None, help="livekit ONNX classifier path")
     parser.add_argument(
         "--threshold",
         type=float,
-        default=float(os.environ.get("FAMILYHUB_WAKE_THRESHOLD", "0.8")),
+        default=float(os.environ.get("FAMILYHUB_WAKE_THRESHOLD", "0.5")),
+    )
+    parser.add_argument(
+        "--wake-phrase",
+        default=os.environ.get("FAMILYHUB_WAKE_PHRASE", "hey james"),
+        help="two-stage Stage-2 confirmation phrase",
+    )
+    parser.add_argument(
+        "--confirm-confidence",
+        type=float,
+        default=float(os.environ.get("FAMILYHUB_WAKE_CONFIRM_CONFIDENCE", "0.6")),
     )
     parser.add_argument("--vosk-model", default=None)
     parser.add_argument("--min-confidence", type=float, default=0.7)
@@ -182,7 +272,7 @@ def main():
     emit({"type": "partial", "text": "", "words": []})  # ready signal
     print(f"wake engine: {description}", file=sys.stderr, flush=True)
 
-    wake_text = wake_words[0]
+    wake_text = args.wake_phrase if args.engine == "twostage" else wake_words[0]
 
     # readline() (not `for line in sys.stdin`) avoids block read-ahead.
     while True:
