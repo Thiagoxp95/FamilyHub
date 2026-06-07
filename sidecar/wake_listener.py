@@ -1,18 +1,26 @@
 #!/usr/bin/env python3
 """FamilyHub wake-word sidecar.
 
-A full ASR (Parakeet) drops a bare isolated "James" because it leans on
-language-model context, so the wake word only fired inside a phrase. This is a
-DEDICATED keyword spotter instead, with two interchangeable engines
-(select via --engine or FAMILYHUB_WAKE_ENGINE):
+A dedicated keyword spotter for the wake phrase (default "hey james"), with three
+interchangeable engines (select via --engine or FAMILYHUB_WAKE_ENGINE):
 
-  livekit (default): a custom livekit-wakeword ONNX model (james.onnx) trained
-    just for "James". Catches isolated "James" and "James <continuation>".
-    Runs on onnxruntime (no PyTorch). Threshold via FAMILYHUB_WAKE_THRESHOLD.
+  twostage (default): two stages. Stage 1 is a custom livekit-wakeword ONNX model
+    (james.onnx) that cheaply flags "james"-ish candidates with high recall.
+    Because james.onnx fires before the word finishes, Stage 2 first collects a
+    short post-trigger window (so the FULL phrase is buffered) and then runs a
+    FREE (unconstrained) Vosk decode, confirming only if it actually hears
+    "hey james". Free decode never force-maps a near-miss ("hey jason") onto the
+    wake word, so a false wake needs both stages wrong at once.
 
-  vosk: Vosk ASR constrained to a ["james","[unk]"] grammar + confidence gate.
-    Heavier model (~40 MB) but no general-speech false-positive drift. Fallback
-    if the livekit model is too trigger-happy in a given room.
+  livekit: Stage 1 alone — the james.onnx classifier over a trailing window.
+    Trigger-happy on its own; useful for debugging Stage 1 in isolation.
+
+  vosk: Vosk ASR constrained to a ["<phrase>","[unk]"] grammar + a confidence
+    gate. Heavier model but no general-speech drift. Standalone fallback if the
+    two-stage engine misbehaves in a given room.
+
+Knobs: FAMILYHUB_WAKE_THRESHOLD (stage-1 recall),
+FAMILYHUB_WAKE_CONFIRM_CONFIDENCE (stage-2 gate), FAMILYHUB_WAKE_PHRASE.
 
 Protocol (newline-delimited over stdio):
   stdin  : base64(int16 LINEAR16 @ 16 kHz mono) per line; OR a JSON control line
@@ -20,9 +28,8 @@ Protocol (newline-delimited over stdio):
   stdout : one JSON object per line:
              {"type": "partial"|"final", "text": str, "words": []}
 The first emitted line is {"type":"partial","text":"","words":[]} as a ready
-signal once the model has loaded (the controller treats the first transcript as
-"listener ready"). A transcript containing the wake word is emitted only when
-one is confidently detected.
+signal once the model has loaded. A transcript containing the wake phrase is
+emitted only when one is confidently detected.
 """
 
 import argparse
@@ -179,7 +186,7 @@ class TwoStageEngine:
             maxlen=self.RING_FRAMES,
         )
         self._leftover = np.zeros(0, dtype=np.int16)
-        self._collecting = 0  # post-trigger frames still to collect before Stage 2
+        self._collecting_samples = 0  # post-trigger samples to buffer before Stage 2
 
     def _push_ring(self, pcm_bytes):
         chunk = np.frombuffer(pcm_bytes, dtype=np.int16)
@@ -206,12 +213,14 @@ class TwoStageEngine:
         return phrase_confirmed(result.get("result", []), self.phrase_tokens, self.min_conf)
 
     def feed(self, pcm_bytes):
-        pushed = self._push_ring(pcm_bytes)
-        if self._collecting > 0:
+        self._push_ring(pcm_bytes)
+        if self._collecting_samples > 0:
             # Collecting post-trigger audio so Stage 2 sees the FULL wake word.
-            self._collecting -= pushed
-            if self._collecting <= 0:
-                self._collecting = 0
+            # Count samples (not frames) so the ~1 s window is independent of the
+            # caller's chunk size.
+            self._collecting_samples -= len(np.frombuffer(pcm_bytes, dtype=np.int16))
+            if self._collecting_samples <= 0:
+                self._collecting_samples = 0
                 if self._confirm():
                     return True
                 self.rejected += 1
@@ -221,8 +230,10 @@ class TwoStageEngine:
                     flush=True,
                 )
             return False
+        # Stage 1 is intentionally not fed during collection: its own cooldown
+        # holds, so it won't re-fire on the same utterance (~3 s effective gap).
         if self.stage1.feed(pcm_bytes):  # Stage-1 candidate → collect rest of word
-            self._collecting = self.POST_TRIGGER_FRAMES
+            self._collecting_samples = self.POST_TRIGGER_FRAMES * self.FRAME
         return False
 
 
