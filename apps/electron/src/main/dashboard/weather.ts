@@ -31,10 +31,27 @@ export interface WeatherSnapshot {
   windMph: number | null;
 }
 
-interface IpLocation {
-  city: string | null;
+interface WeatherLocation {
+  city: string;
   latitude: number;
   longitude: number;
+}
+
+// The kitchen display lives in La Prairie, QC, so the weather is pinned there
+// rather than IP-geolocated (which resolved to Montreal). Overridable via env.
+function resolveLocation(): WeatherLocation {
+  const latitude = Number(process.env.FAMILYHUB_WEATHER_LAT);
+  const longitude = Number(process.env.FAMILYHUB_WEATHER_LON);
+
+  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+    return {
+      city: process.env.FAMILYHUB_WEATHER_CITY?.trim() || "La Prairie",
+      latitude,
+      longitude,
+    };
+  }
+
+  return { city: "La Prairie", latitude: 45.4167, longitude: -73.4958 };
 }
 
 export function mapWeatherCode(code: number, isDay: boolean): WeatherCondition {
@@ -80,68 +97,8 @@ export function mapWeatherCode(code: number, isDay: boolean): WeatherCondition {
   return build("cloudy", "Cloudy");
 }
 
-async function getIpLocation(): Promise<IpLocation> {
-  // Primary: ipwho.is — HTTPS, no key, returns latitude/longitude/city.
-  try {
-    const response = await fetch("https://ipwho.is/");
-
-    if (response.ok) {
-      const data = (await response.json()) as {
-        city?: string;
-        latitude?: number;
-        longitude?: number;
-        success?: boolean;
-      };
-
-      if (
-        data.success !== false &&
-        typeof data.latitude === "number" &&
-        typeof data.longitude === "number"
-      ) {
-        return {
-          city: typeof data.city === "string" ? data.city : null,
-          latitude: data.latitude,
-          longitude: data.longitude,
-        };
-      }
-    }
-  } catch {
-    // Fall through to the secondary provider.
-  }
-
-  // Fallback: ip-api.com (HTTP only on the free tier).
-  const response = await fetch(
-    "http://ip-api.com/json/?fields=status,city,lat,lon",
-  );
-
-  if (!response.ok) {
-    throw new Error(`IP geolocation failed (${response.status}).`);
-  }
-
-  const data = (await response.json()) as {
-    city?: string;
-    lat?: number;
-    lon?: number;
-    status?: string;
-  };
-
-  if (
-    data.status === "success" &&
-    typeof data.lat === "number" &&
-    typeof data.lon === "number"
-  ) {
-    return {
-      city: typeof data.city === "string" ? data.city : null,
-      latitude: data.lat,
-      longitude: data.lon,
-    };
-  }
-
-  throw new Error("IP geolocation returned no coordinates.");
-}
-
 export async function loadWeather(): Promise<WeatherSnapshot> {
-  const location = await getIpLocation();
+  const location = resolveLocation();
   const url = new URL("https://api.open-meteo.com/v1/forecast");
   url.searchParams.set("latitude", String(location.latitude));
   url.searchParams.set("longitude", String(location.longitude));
