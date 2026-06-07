@@ -9,6 +9,8 @@
     "dev": "electron-vite dev",
     "dev:packed": "npm run package && open release/mac-arm64/FamilyHub.app",
     "dist": "npm run build && electron-builder",
+    "dist:mac:arm64": "npm run build && electron-builder --mac --arm64",
+    "release:mac:arm64": "npm run build && electron-builder --mac --arm64 --publish always",
     "lint": "eslint . --max-warnings=0",
     "package": "npm run build && electron-builder --dir",
     "preview": "electron-vite preview",
@@ -19,6 +21,7 @@
     "@google-cloud/speech": "7.3.1",
     "@google/genai": "2.8.0",
     "dotenv": "16.6.1",
+    "electron-updater": "6.8.9",
     "react": "19.2.6",
     "react-dom": "19.2.6"
   },
@@ -37,6 +40,7 @@
   "build": {
     "appId": "com.familyhub.app",
     "productName": "FamilyHub",
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
     "directories": {
       "output": "release"
     },
@@ -48,18 +52,43 @@
       {
         "from": "../../sidecar",
         "to": "sidecar",
-        "filter": ["**/*", "!.venv/**"]
+        "filter": [
+          "**/*",
+          "!.venv/**"
+        ]
       }
     ],
     "mac": {
+      "category": "public.app-category.lifestyle",
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
         "NSAppleEventsUsageDescription": "FamilyHub uses Automation to read your Calendar and Reminders for the kitchen dashboard.",
         "NSMicrophoneUsageDescription": "FamilyHub uses the microphone to listen for the James wake word and assistant commands."
       },
-      "target": "dmg"
+      "hardenedRuntime": true,
+      "notarize": true,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ]
     },
+    "publish": [
+      {
+        "provider": "github",
+        "releaseType": "release"
+      }
+    ],
     "win": {
       "target": "nsis"
     },
