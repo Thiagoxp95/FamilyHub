@@ -20,6 +20,12 @@ contextBridge.exposeInMainWorld("familyHub", {
       ipcRenderer.invoke("assistant:deleteSpeaker", speakerId) as Promise<boolean>,
     enrollSpeaker: (name: string) =>
       ipcRenderer.invoke("assistant:enrollSpeaker", name) as Promise<unknown>,
+    saveEnrollmentClip: (speakerId: string, audioBase64: string) =>
+      ipcRenderer.invoke(
+        "assistant:saveEnrollmentClip",
+        speakerId,
+        audioBase64,
+      ) as Promise<{ sampleCount: number }>,
     getSnapshot: () =>
       ipcRenderer.invoke("assistant:getSnapshot") as Promise<unknown>,
     lockSessionSpeaker: (speakerId: string, speakerLabel: string) =>

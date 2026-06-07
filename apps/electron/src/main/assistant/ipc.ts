@@ -21,6 +21,7 @@ import {
 } from "./localTranscriber";
 import { SpeakerGate } from "./speakerGate";
 import { FileSpeakerProfileStore } from "./profileStore";
+import { EnrollmentStore } from "./enrollmentStore";
 import { AssistantService, PlaceholderGeminiLive } from "./service";
 import type { AssistantSnapshot } from "./types";
 import {
@@ -52,6 +53,7 @@ export function registerAssistantIpc(
   const service = new AssistantService({
     gemini,
     profileStore: new FileSpeakerProfileStore(userDataDirectory),
+    enrollmentStore: new EnrollmentStore(userDataDirectory),
   });
 
   // The single renderer we stream live state to. Set when the renderer starts
@@ -200,6 +202,18 @@ export function registerAssistantIpc(
     await emitSnapshot(event.sender, service);
     return deleted;
   });
+
+  ipcMain.handle(
+    "assistant:saveEnrollmentClip",
+    async (event, speakerId: unknown, audioBase64: unknown) => {
+      const result = await service.saveEnrollmentClip(
+        requireString(speakerId, "Speaker id"),
+        requireString(audioBase64, "Audio"),
+      );
+      await emitSnapshot(event.sender, service);
+      return result;
+    },
+  );
 
   ipcMain.handle("assistant:startListening", async (event) => {
     liveSender = event.sender;

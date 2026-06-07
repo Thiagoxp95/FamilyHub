@@ -13,6 +13,10 @@ interface SpeakerProfileSummary {
   name: string;
 }
 
+interface EnrolledSpeaker extends SpeakerProfileSummary {
+  sampleCount: number;
+}
+
 interface AssistantEvent {
   at: string;
   message: string;
@@ -28,7 +32,7 @@ interface AssistantSnapshot {
   lastTranscript: string | null;
   lockedSpeakerLabel: string | null;
   sessionExpiresAt: string | null;
-  speakers: SpeakerProfileSummary[];
+  speakers: EnrolledSpeaker[];
   wakePhrase: string;
 }
 
@@ -94,6 +98,10 @@ interface AssistantBridge {
   endLive: () => Promise<boolean>;
   onLive: (callback: (event: LiveStateEvent) => void) => () => void;
   onLiveAudio: (callback: (chunk: LiveAudioChunk) => void) => () => void;
+  saveEnrollmentClip: (
+    speakerId: string,
+    audioBase64: string,
+  ) => Promise<{ sampleCount: number }>;
 }
 
 interface Window {
