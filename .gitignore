@@ -12,3 +12,5 @@ coverage
 .credentials
 sidecar/.venv/
 sidecar/models/
+__pycache__/
+*.pyc

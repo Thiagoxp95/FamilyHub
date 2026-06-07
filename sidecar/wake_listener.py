@@ -160,10 +160,9 @@ class TwoStageEngine:
         SetLogLevel(-1)
         self.stage1 = LivekitEngine(model_path, threshold)
         self.vosk_model = Model(vosk_model_path)
-        self.phrase = phrase
         self.phrase_tokens = [t.lower() for t in phrase.split() if t]
         self.min_conf = min_confidence
-        self.grammar = json.dumps([phrase, "[unk]"])
+        self.grammar = json.dumps([phrase.lower(), "[unk]"])
         self.rejected = 0
         self.reset()
 
@@ -185,6 +184,8 @@ class TwoStageEngine:
     def _confirm(self):
         from vosk import KaldiRecognizer
 
+        # Fresh recognizer per candidate (stage-1 cooldown bounds the rate):
+        # a stateless one-shot decode, so no stale state leaks across utterances.
         rec = KaldiRecognizer(self.vosk_model, SAMPLE_RATE, self.grammar)
         rec.SetWords(True)
         audio = np.concatenate(list(self.ring)).astype(np.int16).tobytes()
@@ -251,6 +252,8 @@ def main():
         "--threshold",
         type=float,
         default=float(os.environ.get("FAMILYHUB_WAKE_THRESHOLD", "0.5")),
+        help="stage-1 candidate threshold; tuned low for two-stage recall. "
+        "Pass higher (e.g. 0.8) for a standalone --engine livekit.",
     )
     parser.add_argument(
         "--wake-phrase",
