@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Offline sanity check for the wake-word sidecar.
+"""Offline sanity check for the two-stage wake-word sidecar.
 
 Synthesizes speech with macOS `say`, streams it through wake_listener.py exactly
-as the app does (base64 16 kHz frames over stdio), and checks that an isolated
-"James" wakes while ordinary speech and silence do not. Run with the sidecar
-venv:
+as the app does (base64 16 kHz frames over stdio), and checks that "Hey James"
+wakes while bare "James", near-misses, ordinary speech, and silence do not. Run
+with the sidecar venv:
 
     sidecar/.venv/bin/python sidecar/selftest.py
 
-Exits 0 if isolated "James" wakes and the negatives stay quiet.
+Exits 0 if "Hey James" wakes and every negative stays quiet.
 """
 
 import base64
@@ -76,12 +76,18 @@ def wakes(pcm_bytes):
 
 def main():
     print("Synthesizing speech via `say`…")
-    positives = [("isolated 'James'", say_pcm("James"))]
+    positives = [("'Hey James'", say_pcm("Hey James"))]
     for voice in ("Daniel", "Karen"):
-        positives.append((f"isolated 'James' ({voice})", say_pcm("James", voice)))
+        positives.append((f"'Hey James' ({voice})", say_pcm("Hey James", voice)))
+    positives.append(
+        ("'Hey James turn on the lights'", say_pcm("Hey James turn on the lights"))
+    )
     negatives = [
+        ("bare 'James'", say_pcm("James")),
         ("'what's the weather'", say_pcm("what is the weather like today")),
         ("'the name of the guy is John'", say_pcm("the name of the guy is John")),
+        ("'hey Jason'", say_pcm("hey Jason")),
+        ("'hey can you hear me'", say_pcm("hey can you hear me")),
     ]
 
     ok = True
@@ -102,7 +108,7 @@ def main():
     ok = ok and quiet_silence
 
     if ok:
-        print("\nPASS — wakes on 'James', quiet otherwise.")
+        print("\nPASS — wakes on 'Hey James', quiet otherwise.")
         return 0
     print("\nFAIL — see results above.")
     return 1

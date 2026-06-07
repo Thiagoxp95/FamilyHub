@@ -147,12 +147,19 @@ class VoskEngine:
 
 
 class TwoStageEngine:
-    """Stage 1: livekit james.onnx candidate (high recall). Stage 2: Vosk
-    re-decodes the trailing ring buffer against a tight 'hey james' grammar and
-    must confirm the phrase. A false wake needs BOTH stages wrong at once."""
+    """Stage 1: livekit james.onnx candidate (high recall). On a candidate we do
+    NOT confirm immediately — james.onnx fires before the wake word finishes, so
+    the trailing buffer would only hold a truncated "hey ja…" that cannot be told
+    apart from "hey jason". Instead we COLLECT a post-trigger window so the full
+    word lands in the ring, then Stage 2 runs a FREE (unconstrained) Vosk decode
+    and must find the phrase via phrase_confirmed. Free decode never force-maps a
+    near-miss onto the wake word, and a false wake needs BOTH stages wrong."""
 
     FRAME = 1280  # 80 ms @ 16 kHz, matches LivekitEngine
-    RING_FRAMES = 38  # ~3.0 s trailing window (holds "hey" + pause + "james")
+    RING_FRAMES = 50  # ~4.0 s trailing window (pre-roll + word + post-trigger)
+    POST_TRIGGER_FRAMES = 13  # ~1.04 s collected AFTER stage-1 fires, so the full
+    # wake word is in the ring before Stage-2 decodes (fixes both the truncation
+    # false-wakes and the "fired during 'hey'" misses).
 
     def __init__(self, model_path, threshold, vosk_model_path, phrase, min_confidence):
         from vosk import Model, SetLogLevel
@@ -162,7 +169,6 @@ class TwoStageEngine:
         self.vosk_model = Model(vosk_model_path)
         self.phrase_tokens = [t.lower() for t in phrase.split() if t]
         self.min_conf = min_confidence
-        self.grammar = json.dumps([phrase.lower(), "[unk]"])
         self.rejected = 0
         self.reset()
 
@@ -173,20 +179,26 @@ class TwoStageEngine:
             maxlen=self.RING_FRAMES,
         )
         self._leftover = np.zeros(0, dtype=np.int16)
+        self._collecting = 0  # post-trigger frames still to collect before Stage 2
 
     def _push_ring(self, pcm_bytes):
         chunk = np.frombuffer(pcm_bytes, dtype=np.int16)
         self._leftover = np.concatenate([self._leftover, chunk])
+        pushed = 0
         while len(self._leftover) >= self.FRAME:
             self.ring.append(self._leftover[: self.FRAME])
             self._leftover = self._leftover[self.FRAME :]
+            pushed += 1
+        return pushed
 
     def _confirm(self):
+        # Free (unconstrained) decode: the model is free to emit "jason" instead
+        # of being forced into "james" by a restricted grammar, and confidences
+        # are real (not grammar-forced 1.0), so the phrase_confirmed gate is
+        # meaningful. Fresh recognizer per candidate: stateless one-shot decode.
         from vosk import KaldiRecognizer
 
-        # Fresh recognizer per candidate (stage-1 cooldown bounds the rate):
-        # a stateless one-shot decode, so no stale state leaks across utterances.
-        rec = KaldiRecognizer(self.vosk_model, SAMPLE_RATE, self.grammar)
+        rec = KaldiRecognizer(self.vosk_model, SAMPLE_RATE)
         rec.SetWords(True)
         audio = np.concatenate(list(self.ring)).astype(np.int16).tobytes()
         rec.AcceptWaveform(audio)
@@ -194,16 +206,23 @@ class TwoStageEngine:
         return phrase_confirmed(result.get("result", []), self.phrase_tokens, self.min_conf)
 
     def feed(self, pcm_bytes):
-        self._push_ring(pcm_bytes)
-        if self.stage1.feed(pcm_bytes):  # Stage-1 candidate
-            if self._confirm():
-                return True
-            self.rejected += 1
-            print(
-                f"wake: stage-2 vetoed candidate (rejected={self.rejected})",
-                file=sys.stderr,
-                flush=True,
-            )
+        pushed = self._push_ring(pcm_bytes)
+        if self._collecting > 0:
+            # Collecting post-trigger audio so Stage 2 sees the FULL wake word.
+            self._collecting -= pushed
+            if self._collecting <= 0:
+                self._collecting = 0
+                if self._confirm():
+                    return True
+                self.rejected += 1
+                print(
+                    f"wake: stage-2 vetoed candidate (rejected={self.rejected})",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            return False
+        if self.stage1.feed(pcm_bytes):  # Stage-1 candidate → collect rest of word
+            self._collecting = self.POST_TRIGGER_FRAMES
         return False
 
 
