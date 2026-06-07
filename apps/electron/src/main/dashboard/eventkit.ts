@@ -10,8 +10,8 @@ const execFileAsync = promisify(execFile);
 
 // ASCII Unit/Record separators — never appear in calendar/reminder text, so the
 // AppleScript output needs no JSON/quote escaping.
-const US = String.fromCharCode(31);
-const RS = String.fromCharCode(30);
+export const US = String.fromCharCode(31);
+export const RS = String.fromCharCode(30);
 
 export interface CalendarEvent {
   allDay: boolean;
@@ -42,12 +42,12 @@ export type RemindersResult =
   | { status: "denied" }
   | { status: "error"; error: string };
 
-function appleScriptString(value: string): string {
+export function appleScriptString(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 // An AppleScript `date "..."` literal in the machine's local locale.
-function appleScriptDate(date: Date): string {
+export function appleScriptDate(date: Date): string {
   const weekday = date.toLocaleDateString("en-US", { weekday: "long" });
   const month = date.toLocaleDateString("en-US", { month: "long" });
   const day = date.getDate();
@@ -66,7 +66,7 @@ function appleScriptDate(date: Date): string {
 }
 
 // Local ISO formatter (no timezone) — Date.parse reads it back in local time.
-const isoHandlers = `
+export const isoHandlers = `
 on pad(n)
   set n to n as integer
   if n < 10 then return "0" & (n as text)
@@ -124,7 +124,7 @@ ${isoHandlers}`;
 }
 
 // -1743 / "Not authorized" is a genuine Automation denial → surface "denied".
-function isAuthError(message: string): boolean {
+export function isAuthError(message: string): boolean {
   return /not authoriz|not allowed|-1743|assistive/i.test(message);
 }
 
@@ -159,7 +159,7 @@ async function launchAppHidden(appName: string): Promise<void> {
   }
 }
 
-async function runWithLaunch(script: string, appName: string): Promise<string> {
+export async function runWithLaunch(script: string, appName: string): Promise<string> {
   try {
     return await runOsascript(script);
   } catch (err) {

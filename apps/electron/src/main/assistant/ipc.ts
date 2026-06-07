@@ -1,10 +1,16 @@
 import { ipcMain, type WebContents } from "electron";
 import { processLinear16AudioChunk } from "./audioPipeline";
-import { GeminiLiveSession } from "./liveSession";
+import * as calendarTools from "./calendarTools";
+import {
+  GeminiLiveSession,
+  buildSystemInstruction,
+  calendarToolNames,
+} from "./liveSession";
 import {
   LiveController,
   type LiveControllerSink,
   type LiveStateEvent,
+  type ToolRunner,
 } from "./liveController";
 import {
   WakeWordSidecar,
@@ -24,7 +30,15 @@ const assistantStateChannel = "assistant:state";
 const liveStateChannel = "assistant:live";
 const liveAudioChannel = "assistant:liveAudio";
 
-export function registerAssistantIpc(userDataDirectory: string): void {
+export interface DashboardRefresh {
+  refreshCalendar: () => Promise<void>;
+  refreshReminders: () => Promise<void>;
+}
+
+export function registerAssistantIpc(
+  userDataDirectory: string,
+  dashboard?: DashboardRefresh,
+): void {
   const geminiApiKey =
     process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? process.env.GOOGLE_API;
   const gemini = geminiApiKey
@@ -65,6 +79,76 @@ export function registerAssistantIpc(userDataDirectory: string): void {
     },
   };
 
+  // Dispatch a Gemini tool call to the Calendar/Reminders layer, refreshing the
+  // affected dashboard card after a write so the change shows immediately.
+  const runTool: ToolRunner = async (name, args) => {
+    const str = (v: unknown): string => (typeof v === "string" ? v : "");
+    const optStr = (v: unknown): string | undefined =>
+      typeof v === "string" && v.trim() ? v : undefined;
+    const minutes = (v: unknown): number[] | undefined =>
+      Array.isArray(v) ? v.filter((n): n is number => typeof n === "number") : undefined;
+
+    switch (name) {
+      case calendarToolNames.listEvents:
+        return {
+          ok: true,
+          events: await calendarTools.listEvents(
+            typeof args.daysAhead === "number" ? args.daysAhead : undefined,
+          ),
+        };
+      case calendarToolNames.createEvent: {
+        const event = await calendarTools.createEvent({
+          title: str(args.title),
+          start: str(args.start),
+          end: optStr(args.end),
+          allDay: args.allDay === true,
+          calendar: optStr(args.calendar),
+          alarmsMinutesBefore: minutes(args.alarmsMinutesBefore),
+        });
+        await dashboard?.refreshCalendar();
+        return { ok: true, event };
+      }
+      case calendarToolNames.updateEvent: {
+        await calendarTools.updateEvent({
+          id: str(args.id),
+          title: optStr(args.title),
+          start: optStr(args.start),
+          end: optStr(args.end),
+          allDay: typeof args.allDay === "boolean" ? args.allDay : undefined,
+          alarmsMinutesBefore: minutes(args.alarmsMinutesBefore),
+        });
+        await dashboard?.refreshCalendar();
+        return { ok: true };
+      }
+      case calendarToolNames.deleteEvent:
+        await calendarTools.deleteEvent(str(args.id));
+        await dashboard?.refreshCalendar();
+        return { ok: true };
+      case calendarToolNames.listReminders:
+        return { ok: true, reminders: await calendarTools.listReminders() };
+      case calendarToolNames.createReminder: {
+        const result = await calendarTools.createReminder({
+          title: str(args.title),
+          due: optStr(args.due),
+          list: optStr(args.list),
+          notes: optStr(args.notes),
+        });
+        await dashboard?.refreshReminders();
+        return { ok: true, list: result.list };
+      }
+      case calendarToolNames.completeReminder:
+        await calendarTools.completeReminder(str(args.id));
+        await dashboard?.refreshReminders();
+        return { ok: true };
+      case calendarToolNames.deleteReminder:
+        await calendarTools.deleteReminder(str(args.id));
+        await dashboard?.refreshReminders();
+        return { ok: true };
+      default:
+        return { ok: false, error: `Unknown tool: ${name}` };
+    }
+  };
+
   const sidecarPython = resolveSidecarPython();
   const sidecarScript = resolveSidecarScript();
   const controller =
@@ -72,7 +156,12 @@ export function registerAssistantIpc(userDataDirectory: string): void {
       ? new LiveController({
           createTranscriber: (): LocalTranscriber =>
             new WakeWordSidecar(sidecarPython, sidecarScript),
-          createSession: () => new GeminiLiveSession({ apiKey: geminiApiKey }),
+          createSession: () =>
+            new GeminiLiveSession({
+              apiKey: geminiApiKey,
+              systemInstruction: buildSystemInstruction(),
+            }),
+          runTool,
           sink,
         })
       : null;

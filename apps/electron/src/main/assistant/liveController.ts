@@ -40,10 +40,18 @@ export interface LiveControllerSink {
   emitSnapshot(): void;
 }
 
+// Runs a non-end_conversation tool call and returns the result object sent back
+// to Gemini. Injected so the controller stays free of Calendar/Reminders logic.
+export type ToolRunner = (
+  name: string,
+  args: Record<string, unknown>,
+) => Promise<Record<string, unknown>>;
+
 export interface LiveControllerOptions {
   createTranscriber: () => LocalTranscriber;
   createSession: () => LiveSessionLike;
   sink: LiveControllerSink;
+  runTool?: ToolRunner;
   wakePhrases?: string[];
   config?: ListenerConfig;
   idleTimeoutMs?: number;
@@ -56,6 +64,7 @@ export class LiveController {
   private readonly createTranscriber: () => LocalTranscriber;
   private readonly createSession: () => LiveSessionLike;
   private readonly sink: LiveControllerSink;
+  private readonly runTool: ToolRunner | null;
   private readonly wakePhrases: string[];
   private readonly config: ListenerConfig;
   private readonly idleTimeoutMs: number;
@@ -77,6 +86,7 @@ export class LiveController {
     this.createTranscriber = options.createTranscriber;
     this.createSession = options.createSession;
     this.sink = options.sink;
+    this.runTool = options.runTool ?? null;
     this.wakePhrases = options.wakePhrases ?? defaultWakePhrases;
     this.config = options.config ?? defaultListenerConfig;
     this.idleTimeoutMs = options.idleTimeoutMs ?? defaultIdleTimeoutMs;
@@ -295,6 +305,10 @@ export class LiveController {
             this.pendingReason = this.endReason;
             this.apply({ type: "stop" });
           }, 5_000);
+        } else {
+          // Calendar/Reminders tool — run it and return the result to Gemini.
+          this.armIdleTimer();
+          void this.runToolCall(event.id, event.name, event.args);
         }
         break;
       case "interrupted":
@@ -324,6 +338,31 @@ export class LiveController {
         this.armIdleTimer();
         break;
     }
+  }
+
+  private async runToolCall(
+    id: string,
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this.runTool) {
+      this.session?.sendToolResponse(id, name, {
+        ok: false,
+        error: "Tool is not available.",
+      });
+      return;
+    }
+
+    let result: Record<string, unknown>;
+    try {
+      result = await this.runTool(name, args);
+    } catch (error) {
+      result = { ok: false, error: readErrorMessage(error) };
+    }
+
+    // The session may have ended while the tool ran.
+    this.session?.sendToolResponse(id, name, result);
+    this.sink.emitSnapshot();
   }
 
   private armIdleTimer(): void {

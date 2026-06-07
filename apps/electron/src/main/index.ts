@@ -55,9 +55,9 @@ app.whenReady().then(async () => {
   configureMediaPermissions(session.defaultSession);
   await requestMicrophoneAccess({ systemPreferences });
   ipcMain.handle("app:ping", () => "pong");
-  registerAssistantIpc(app.getPath("userData"));
+  const dashboard = registerDashboardIpc();
+  registerAssistantIpc(app.getPath("userData"), dashboard);
   createMainWindow();
-  registerDashboardIpc();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

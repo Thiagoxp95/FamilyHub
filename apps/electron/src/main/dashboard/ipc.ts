@@ -25,7 +25,10 @@ function broadcast(channel: string, payload: unknown): void {
   }
 }
 
-export function registerDashboardIpc(): void {
+export function registerDashboardIpc(): {
+  refreshCalendar: () => Promise<void>;
+  refreshReminders: () => Promise<void>;
+} {
   let weather: WeatherResult = { ok: false, error: "Loading weather…" };
   let calendar: CalendarResult = { status: "denied" };
   let reminders: RemindersResult = { status: "denied" };
@@ -80,4 +83,8 @@ export function registerDashboardIpc(): void {
     void refreshCalendar();
     void refreshReminders();
   }, eventkitRefreshMs);
+
+  // Exposed so the assistant can re-pull a card right after the agent writes to
+  // Calendar/Reminders, instead of waiting for the periodic refresh.
+  return { refreshCalendar, refreshReminders };
 }
