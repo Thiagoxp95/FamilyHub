@@ -24,7 +24,6 @@ import os
 import sys
 
 import numpy as np
-import sherpa_onnx as so
 
 SAMPLE_RATE = 16000
 WINDOW = 512  # silero VAD window at 16 kHz
@@ -34,6 +33,32 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 def emit(message):
     sys.stdout.write(json.dumps(message) + "\n")
     sys.stdout.flush()
+
+
+def decide(refs, locked, emb, threshold):
+    """Pure gate verdict.
+
+    refs: list of (speaker_id, voiceprint np.ndarray) — the loaded family.
+    locked: the locked reference embedding (np.ndarray) or None.
+    emb: the current utterance embedding (np.ndarray).
+    Returns one of:
+      ("forward", None)   — matches the locked wake voice
+      ("drop", None)      — a different voice during a locked session
+      ("lock", speaker_id)— first utterance matches family (or open-mic when no
+                            refs, speaker_id None) → caller locks to `emb`
+      ("rejected", best)  — first utterance matched no enrolled family
+    """
+    if locked is not None:
+        score = float(np.dot(locked, emb))
+        return ("forward", None) if score >= threshold else ("drop", None)
+    if not refs:
+        return ("lock", None)  # open-mic fallback: nobody enrolled yet
+    best_id, best = None, -1.0
+    for speaker_id, vec in refs:
+        score = float(np.dot(vec, emb))
+        if score > best:
+            best, best_id = score, speaker_id
+    return ("lock", best_id) if best >= threshold else ("rejected", best)
 
 
 def main():
