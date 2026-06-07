@@ -180,6 +180,11 @@ export function registerAssistantIpc(
           ...(gateScript
             ? { createGate: () => new SpeakerGate(sidecarPython, gateScript) }
             : {}),
+          getVoiceprints: async () => {
+            const speakers = await service.listSpeakers();
+            const allowed = speakers.filter((s) => s.allowed).map((s) => s.id);
+            return voiceprintStore.loadAll(allowed);
+          },
           sink,
         })
       : null;

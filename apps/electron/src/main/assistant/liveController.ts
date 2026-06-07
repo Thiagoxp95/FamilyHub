@@ -55,6 +55,9 @@ export interface LiveControllerOptions {
   runTool?: ToolRunner;
   // Optional speaker hard-lock: enroll the invoker and forward only their voice.
   createGate?: () => SpeakerGateLike;
+  // Returns the enrolled family's voiceprints so the gate can match the wake
+  // utterance against them. If absent, the gate falls back to open-mic mode.
+  getVoiceprints?: () => Promise<{ id: string; vec: number[] }[]>;
   wakePhrases?: string[];
   config?: ListenerConfig;
   idleTimeoutMs?: number;
@@ -69,6 +72,7 @@ export class LiveController {
   private readonly sink: LiveControllerSink;
   private readonly runTool: ToolRunner | null;
   private readonly createGate: (() => SpeakerGateLike) | null;
+  private readonly getVoiceprints: (() => Promise<{ id: string; vec: number[] }[]>) | null;
   private gate: SpeakerGateLike | null = null;
   private readonly wakePhrases: string[];
   private readonly config: ListenerConfig;
@@ -93,6 +97,7 @@ export class LiveController {
     this.sink = options.sink;
     this.runTool = options.runTool ?? null;
     this.createGate = options.createGate ?? null;
+    this.getVoiceprints = options.getVoiceprints ?? null;
     this.wakePhrases = options.wakePhrases ?? defaultWakePhrases;
     this.config = options.config ?? defaultListenerConfig;
     this.idleTimeoutMs = options.idleTimeoutMs ?? defaultIdleTimeoutMs;
@@ -141,11 +146,17 @@ export class LiveController {
       await this.gate.start({
         onForward: (audio) => this.session?.sendAudioFrame(audio),
         onDecision: (decision) => {
-          if (decision.type === "dropped") {
+          if (decision.type === "rejected") {
+            this.sink.noteInfo("🔒 not a recognized voice — ending session.");
+            void this.closeSession();
+          } else if (decision.type === "dropped") {
             this.sink.noteInfo(`🔇 ignored a different voice (${decision.score ?? "?"})`);
           }
         },
       });
+      if (this.getVoiceprints) {
+        this.gate.loadVoiceprints(await this.getVoiceprints());
+      }
     }
   }
 
@@ -234,6 +245,9 @@ export class LiveController {
     this.inputTurnBuffer = "";
     this.outputTurnBuffer = "";
     this.gate?.reset(); // new session → re-enroll the next speaker
+    if (this.gate && this.getVoiceprints) {
+      this.gate.loadVoiceprints(await this.getVoiceprints());
+    }
     this.sink.sendLive({ type: "status", message: "Connecting…" });
 
     try {
