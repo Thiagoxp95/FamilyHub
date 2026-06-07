@@ -1,6 +1,6 @@
 {
   "name": "@family-hub/electron",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "./out/main/index.js",
@@ -86,6 +86,8 @@
     "publish": [
       {
         "provider": "github",
+        "owner": "Thiagoxp95",
+        "repo": "FamilyHub",
         "releaseType": "release"
       }
     ],
