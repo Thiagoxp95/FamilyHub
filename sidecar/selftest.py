@@ -76,14 +76,18 @@ def wakes(pcm_bytes):
 
 def main():
     print("Synthesizing speech via `say`…")
-    positives = [("'Hey James'", say_pcm("Hey James"))]
+    # Single-stage livekit on the ACAV-retrained model keys on "james", so both
+    # "Hey James" and bare "James" wake; it rejects "hey jason" + general speech.
+    positives = [
+        ("'Hey James'", say_pcm("Hey James")),
+        ("bare 'James'", say_pcm("James")),
+    ]
     for voice in ("Daniel", "Karen"):
         positives.append((f"'Hey James' ({voice})", say_pcm("Hey James", voice)))
     positives.append(
         ("'Hey James turn on the lights'", say_pcm("Hey James turn on the lights"))
     )
     negatives = [
-        ("bare 'James'", say_pcm("James")),
         ("'what's the weather'", say_pcm("what is the weather like today")),
         ("'the name of the guy is John'", say_pcm("the name of the guy is John")),
         ("'hey Jason'", say_pcm("hey Jason")),

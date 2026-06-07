@@ -276,14 +276,14 @@ def main():
     parser.add_argument(
         "--engine",
         choices=["twostage", "livekit", "vosk"],
-        default=os.environ.get("FAMILYHUB_WAKE_ENGINE", "twostage"),
+        default=os.environ.get("FAMILYHUB_WAKE_ENGINE", "livekit"),
     )
     parser.add_argument("--wake-words", default=DEFAULT_WAKE_WORDS)
     parser.add_argument("--model", default=None, help="livekit ONNX classifier path")
     parser.add_argument(
         "--threshold",
         type=float,
-        default=float(os.environ.get("FAMILYHUB_WAKE_THRESHOLD", "0.5")),
+        default=float(os.environ.get("FAMILYHUB_WAKE_THRESHOLD", "0.82")),
         help="stage-1 candidate threshold; tuned low for two-stage recall. "
         "Pass higher (e.g. 0.8) for a standalone --engine livekit.",
     )
