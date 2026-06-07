@@ -131,11 +131,10 @@ export class AssistantService {
       throw new Error("Enrollment storage is unavailable.");
     }
     const bytes = Buffer.from(audioBase64, "base64");
-    const samples = new Int16Array(
-      bytes.buffer,
-      bytes.byteOffset,
-      Math.floor(bytes.byteLength / 2),
-    );
+    const samples = new Int16Array(bytes.length >> 1);
+    for (let i = 0; i < samples.length; i += 1) {
+      samples[i] = bytes.readInt16LE(i * 2);
+    }
     const sampleCount = await this.enrollmentStore.saveClip(speakerId, samples);
     return { sampleCount };
   }
