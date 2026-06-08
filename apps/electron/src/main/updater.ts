@@ -56,8 +56,17 @@ export function createUpdaterController({
 }): UpdaterController {
   let status: UpdaterStatus = { state: "idle" };
   let intervalId: NodeJS.Timeout | null = null;
+  let startPromise: Promise<void> | null = null;
 
   function publish(next: UpdaterStatus): UpdaterStatus {
+    if (!isPackaged) {
+      return status;
+    }
+
+    if (status.state === "downloaded" && next.state !== "downloaded") {
+      return status;
+    }
+
     status = next;
     broadcaster.broadcast(updaterStatusChannel, status);
     return status;
@@ -76,7 +85,10 @@ export function createUpdaterController({
     return version === undefined ? { state } : { state, version };
   }
 
-  updater.autoDownload = true;
+  if (isPackaged) {
+    updater.autoDownload = true;
+  }
+
   updater.on("checking-for-update", () => {
     publish({ state: "checking" });
   });
@@ -105,11 +117,9 @@ export function createUpdaterController({
   });
 
   async function checkNow(): Promise<UpdaterStatus> {
-    if (!isPackaged) {
+    if (!isPackaged || status.state === "downloaded") {
       return status;
     }
-
-    publish({ state: "checking" });
 
     try {
       await updater.checkForUpdates();
@@ -139,11 +149,19 @@ export function createUpdaterController({
         return;
       }
 
-      await checkNow();
-      intervalId = setInterval(() => {
-        void checkNow();
-      }, updateCheckIntervalMs);
-      intervalId.unref?.();
+      if (startPromise) {
+        return startPromise;
+      }
+
+      startPromise = (async () => {
+        await checkNow();
+        intervalId = setInterval(() => {
+          void checkNow();
+        }, updateCheckIntervalMs);
+        intervalId.unref?.();
+      })();
+
+      return startPromise;
     },
   };
 }

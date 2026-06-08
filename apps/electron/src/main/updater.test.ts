@@ -9,7 +9,9 @@ import {
 
 class FakeUpdater extends EventEmitter implements UpdaterAdapter {
   autoDownload = false;
-  checkForUpdates = vi.fn(async () => undefined);
+  checkForUpdates = vi.fn(async () => {
+    this.emit("checking-for-update");
+  });
   quitAndInstall = vi.fn();
 }
 
@@ -43,6 +45,25 @@ describe("createUpdaterController", () => {
 
     expect(controller.getStatus()).toMatchObject({ state: "idle" });
     expect(updater.checkForUpdates).not.toHaveBeenCalled();
+    expect(broadcaster.sent).toEqual([]);
+  });
+
+  it("ignores updater events in development mode", () => {
+    const updater = new FakeUpdater();
+    const broadcaster = createBroadcaster();
+    const controller = createUpdaterController({
+      broadcaster,
+      isPackaged: false,
+      updater,
+    });
+
+    updater.emit("checking-for-update");
+    updater.emit("update-available", { version: "0.1.1" });
+    updater.emit("download-progress", { percent: 42.4 });
+    updater.emit("update-downloaded", { version: "0.1.1" });
+    updater.emit("error", new Error("network failed"));
+
+    expect(controller.getStatus()).toMatchObject({ state: "idle" });
     expect(broadcaster.sent).toEqual([]);
   });
 
@@ -106,6 +127,78 @@ describe("createUpdaterController", () => {
     await controller.installNow();
 
     expect(updater.quitAndInstall).not.toHaveBeenCalled();
+  });
+
+  it("keeps downloaded state through later manual checks", async () => {
+    const updater = new FakeUpdater();
+    const broadcaster = createBroadcaster();
+    const controller = createUpdaterController({
+      broadcaster,
+      isPackaged: true,
+      updater,
+    });
+
+    updater.emit("update-downloaded", { version: "0.1.1" });
+    await controller.checkNow();
+    updater.emit("update-not-available", { version: "0.0.0" });
+    await controller.installNow();
+
+    expect(controller.getStatus()).toMatchObject({
+      state: "downloaded",
+      version: "0.1.1",
+    });
+    expect(updater.checkForUpdates).not.toHaveBeenCalled();
+    expect(updater.quitAndInstall).toHaveBeenCalledWith(false, true);
+    expect(broadcaster.sent).toMatchObject([
+      { state: "downloaded", version: "0.1.1" },
+    ]);
+  });
+
+  it("keeps downloaded state through scheduled checks", async () => {
+    const updater = new FakeUpdater();
+    const broadcaster = createBroadcaster();
+    const controller = createUpdaterController({
+      broadcaster,
+      isPackaged: true,
+      updater,
+    });
+
+    await controller.start();
+    updater.emit("update-downloaded", { version: "0.1.1" });
+    await vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1000);
+
+    expect(controller.getStatus()).toMatchObject({
+      state: "downloaded",
+      version: "0.1.1",
+    });
+    expect(updater.checkForUpdates).toHaveBeenCalledTimes(1);
+    expect(broadcaster.sent).toMatchObject([
+      { state: "checking" },
+      { state: "downloaded", version: "0.1.1" },
+    ]);
+  });
+
+  it("starts only one check loop when called repeatedly", async () => {
+    const updater = new FakeUpdater();
+    const broadcaster = createBroadcaster();
+    const controller = createUpdaterController({
+      broadcaster,
+      isPackaged: true,
+      updater,
+    });
+
+    await controller.start();
+    await controller.start();
+
+    expect(vi.getTimerCount()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1000);
+
+    expect(updater.checkForUpdates).toHaveBeenCalledTimes(2);
+    expect(broadcaster.sent).toMatchObject([
+      { state: "checking" },
+      { state: "checking" },
+    ]);
   });
 
   it("stores updater errors without throwing", () => {
