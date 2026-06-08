@@ -3,6 +3,7 @@ import { base64ToInt16, convertFloatSamplesToLinear16, int16ToBase64 } from "./a
 import { CalendarPanel } from "./CalendarPanel";
 import { FamilySetup } from "./FamilySetup";
 import { RemindersPanel } from "./RemindersPanel";
+import { UpdateControl } from "./UpdateControl";
 import { WeatherPanel } from "./WeatherPanel";
 
 const emptySnapshot: AssistantSnapshot = {
@@ -233,6 +234,7 @@ export function App(): React.JSX.Element {
           ) : null}
         </div>
         <div className="voice-strip-side">
+          <UpdateControl />
           <MicrophoneMeter
             active={micStatus.startsWith("Microphone live")}
             level={micLevel}

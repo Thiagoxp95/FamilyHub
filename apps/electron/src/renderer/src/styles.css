@@ -175,6 +175,42 @@ button:disabled {
   gap: 9px;
 }
 
+.update-control {
+  align-items: center;
+  background: var(--hub-glass-2, #f3f6f5);
+  border: 1px solid var(--hub-stroke-soft, #cdd8d9);
+  border-radius: 8px;
+  color: var(--hub-text-2, #263538);
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-height: 40px;
+  padding: 6px 8px 6px 12px;
+}
+
+.update-control span {
+  font-size: 0.78rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.update-control button {
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+.update-control--ready {
+  background: rgba(48, 209, 88, 0.12);
+  border-color: rgba(48, 209, 88, 0.45);
+  color: var(--hub-text, #263538);
+}
+
+.update-control--error {
+  background: rgba(255, 69, 58, 0.13);
+  border-color: rgba(255, 69, 58, 0.48);
+  color: var(--hub-error-text, #8f2219);
+}
+
 /* ---------- 2x2 quadrant grid ---------- */
 .quad-grid {
   display: grid;
