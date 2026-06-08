@@ -15,6 +15,7 @@ import {
   configureMediaPermissions,
   requestMicrophoneAccess,
 } from "./permissions";
+import { registerUpdaterIpc } from "./updater";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 
@@ -57,6 +58,8 @@ app.whenReady().then(async () => {
   ipcMain.handle("app:ping", () => "pong");
   const dashboard = registerDashboardIpc();
   registerAssistantIpc(app.getPath("userData"), dashboard);
+  const updater = registerUpdaterIpc({ appIsPackaged: app.isPackaged });
+  void updater.start();
   createMainWindow();
 
   app.on("activate", () => {

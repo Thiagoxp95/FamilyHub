@@ -106,6 +106,29 @@ interface AssistantBridge {
   ) => Promise<{ sampleCount: number }>;
 }
 
+type UpdateState =
+  | "idle"
+  | "checking"
+  | "available"
+  | "downloading"
+  | "downloaded"
+  | "not-available"
+  | "error";
+
+interface UpdaterStatus {
+  error?: string;
+  percent?: number;
+  state: UpdateState;
+  version?: string;
+}
+
+interface UpdaterBridge {
+  check: () => Promise<UpdaterStatus>;
+  getStatus: () => Promise<UpdaterStatus>;
+  install: () => Promise<UpdaterStatus>;
+  onStatus: (callback: (status: UpdaterStatus) => void) => () => void;
+}
+
 interface Window {
   webkitAudioContext?: typeof AudioContext;
 }
@@ -186,6 +209,7 @@ interface DashboardBridge {
 interface FamilyHubBridge {
   assistant: AssistantBridge;
   dashboard: DashboardBridge;
+  updater: UpdaterBridge;
   ping: () => Promise<string>;
 }
 

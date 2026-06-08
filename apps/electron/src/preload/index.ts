@@ -111,5 +111,12 @@ contextBridge.exposeInMainWorld("familyHub", {
     connectReminders: () =>
       ipcRenderer.invoke("dashboard:connectReminders") as Promise<unknown>,
   },
+  updater: {
+    check: () => ipcRenderer.invoke("updater:check") as Promise<unknown>,
+    getStatus: () =>
+      ipcRenderer.invoke("updater:getStatus") as Promise<unknown>,
+    install: () => ipcRenderer.invoke("updater:install") as Promise<unknown>,
+    onStatus: makeSubscription("updater:status"),
+  },
   ping: () => ipcRenderer.invoke("app:ping") as Promise<string>,
 });
