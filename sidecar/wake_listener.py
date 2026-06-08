@@ -104,7 +104,22 @@ WAKE_TOKEN_ALIASES = {
 def text_contains_wake_token(text, distinctive_tokens):
     """True iff any distinctive token (or a curated alias of it) appears as a
     WHOLE word in a free-decode transcript. Whole-word, not substring, so
-    'jameson'/'names' do not match."""
+    'jameson'/'names' do not match.
+
+    `distinctive_tokens` must be CANONICAL keys as they appear in
+    WAKE_TOKEN_ALIASES (e.g. "james"), NOT aliases such as "jaymes".
+    Aliases are only stored as VALUES of that dict; passing an alias as a
+    token would fall through to the bare ``(token,)`` fallback and miss every
+    other alias for that canonical word.  This mirrors how gating.ts keys its
+    alias map by the canonical word.
+
+    Normalization note: punctuation is replaced with spaces via
+    ``str.isalnum()``, which also retains Unicode letters (e.g. accented
+    chars).  This is not byte-identical to gating.ts's ``[^a-z0-9]+`` regex,
+    which strips non-ASCII.  The difference is intentional and harmless: the
+    upstream ASR is English-only, so non-ASCII characters will not appear in
+    practice.
+    """
     normalized = "".join(
         c if (c.isalnum() or c.isspace()) else " " for c in text.lower()
     )
