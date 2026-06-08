@@ -224,14 +224,38 @@ class VoskEngine:
         return woke
 
 
+class MoonshineConfirmer:
+    """sherpa-onnx Moonshine tiny.en offline recognizer. Free-decodes a short tail
+    of int16 PCM and returns the transcript text."""
+
+    def __init__(self, model_dir):
+        import sherpa_onnx
+
+        self.recognizer = sherpa_onnx.OfflineRecognizer.from_moonshine(
+            preprocessor=os.path.join(model_dir, "preprocess.onnx"),
+            encoder=os.path.join(model_dir, "encode.int8.onnx"),
+            uncached_decoder=os.path.join(model_dir, "uncached_decode.int8.onnx"),
+            cached_decoder=os.path.join(model_dir, "cached_decode.int8.onnx"),
+            tokens=os.path.join(model_dir, "tokens.txt"),
+        )
+
+    def decode(self, samples_int16):
+        stream = self.recognizer.create_stream()
+        samples = samples_int16.astype(np.float32) / 32768.0
+        stream.accept_waveform(SAMPLE_RATE, samples)
+        self.recognizer.decode_stream(stream)
+        return stream.result.text
+
+
 class TwoStageEngine:
-    """Stage 1: livekit james.onnx candidate (high recall). On a candidate we do
-    NOT confirm immediately — james.onnx fires before the wake word finishes, so
-    the trailing buffer would only hold a truncated "hey ja…" that cannot be told
+    """Stage 1: OpenWakeWord ONNX candidate detector (high recall). On a candidate
+    we do NOT confirm immediately — the model fires before the wake word finishes,
+    so the trailing buffer would only hold a truncated "hey ja…" that cannot be told
     apart from "hey jason". Instead we COLLECT a post-trigger window so the full
-    word lands in the ring, then Stage 2 runs a FREE (unconstrained) Vosk decode
-    and must find the phrase via phrase_confirmed. Free decode never force-maps a
-    near-miss onto the wake word, and a false wake needs BOTH stages wrong."""
+    word lands in the ring, then Stage 2 runs a FREE (unconstrained) Moonshine
+    decode and must find a wake token via text_contains_wake_token. Free decode
+    never force-maps a near-miss onto the wake word, and a false wake needs BOTH
+    stages wrong."""
 
     FRAME = 1280  # 80 ms @ 16 kHz, matches LivekitEngine
     RING_FRAMES = 50  # ~4.0 s trailing window (pre-roll + word + post-trigger)
@@ -243,14 +267,10 @@ class TwoStageEngine:
     DEFAULT_POST_TRIGGER_MS = 640
     CONFIRM_DECODE_FRAMES = 25  # ~2 s tail decoded by Stage 2 (word + post-trigger)
 
-    def __init__(self, model_path, threshold, vosk_model_path, phrase, min_confidence):
-        from vosk import Model, SetLogLevel
-
-        SetLogLevel(-1)
-        self.stage1 = LivekitEngine(model_path, threshold)
-        self.vosk_model = Model(vosk_model_path)
-        self.phrase_tokens = [t.lower() for t in phrase.split() if t]
-        self.min_conf = min_confidence
+    def __init__(self, model_path, threshold, confirmer, confirm_tokens):
+        self.stage1 = OpenWakeWordEngine(model_path, threshold)
+        self.confirmer = confirmer
+        self.confirm_tokens = confirm_tokens
         post_trigger_ms = float(
             os.environ.get("FAMILYHUB_WAKE_POST_TRIGGER_MS", self.DEFAULT_POST_TRIGGER_MS)
         )
@@ -278,32 +298,15 @@ class TwoStageEngine:
         return pushed
 
     def _confirm(self):
-        # Free (unconstrained) decode: the model is free to emit "jason" instead
-        # of being forced into "james" by a restricted grammar, and confidences
-        # are real (not grammar-forced 1.0), so the phrase_confirmed gate is
-        # meaningful. Fresh recognizer per candidate: stateless one-shot decode.
-        from vosk import KaldiRecognizer
-
-        rec = KaldiRecognizer(self.vosk_model, SAMPLE_RATE)
-        rec.SetWords(True)
-        # Decode only the last ~2 s (the wake word + post-trigger), NOT the full
-        # 4 s ring: older pre-roll audio just gives the small model room to
-        # hallucinate a whole sentence ("i mean that a games"), which both hides
-        # the wake word and slows the decode. The word always lands in this tail.
+        # Free (unconstrained) decode of only the last ~2 s (wake word + post-trigger),
+        # NOT the full ring — older pre-roll just lets the model hallucinate a sentence
+        # that hides the word. Moonshine decodes the tail fast; the word always lands here.
         tail = list(self.ring)[-self.CONFIRM_DECODE_FRAMES :]
-        audio = np.concatenate(tail).astype(np.int16).tobytes()
-        rec.AcceptWaveform(audio)
-        result = json.loads(rec.FinalResult())
-        # Capture what Stage 2 actually heard so a veto is diagnosable: "wrong word"
-        # (model mis-transcribed james → tune nothing, need a better model/alias) vs
-        # "low confidence" (correct word, tune confirm-confidence) vs "correct
-        # reject" (really was hey cames). Stored for the feed() log line.
-        words = result.get("result", [])
-        self._last_heard = "heard='{}' [{}]".format(
-            result.get("text", ""),
-            " ".join(f"{w.get('word')}:{w.get('conf', 0.0):.2f}" for w in words),
-        )
-        return phrase_confirmed(words, self.phrase_tokens, self.min_conf)
+        audio = np.concatenate(tail).astype(np.int16)
+        text = self.confirmer.decode(audio)
+        # Record what Stage 2 heard so a veto is diagnosable.
+        self._last_heard = "heard='{}'".format(text)
+        return text_contains_wake_token(text, self.confirm_tokens)
 
     def feed(self, pcm_bytes):
         self._push_ring(pcm_bytes)
