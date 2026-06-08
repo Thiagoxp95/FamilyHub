@@ -56,6 +56,7 @@ export function createUpdaterController({
 }): UpdaterController {
   let status: UpdaterStatus = { state: "idle" };
   let intervalId: NodeJS.Timeout | null = null;
+  let checkPromise: Promise<UpdaterStatus> | null = null;
   let startPromise: Promise<void> | null = null;
 
   function publish(next: UpdaterStatus): UpdaterStatus {
@@ -121,13 +122,25 @@ export function createUpdaterController({
       return status;
     }
 
-    try {
-      await updater.checkForUpdates();
-    } catch (error) {
-      publish({ state: "error", error: readError(error) });
+    if (checkPromise) {
+      return checkPromise;
     }
 
-    return status;
+    checkPromise = (async () => {
+      try {
+        await updater.checkForUpdates();
+      } catch (error) {
+        publish({ state: "error", error: readError(error) });
+      }
+
+      return status;
+    })();
+
+    try {
+      return await checkPromise;
+    } finally {
+      checkPromise = null;
+    }
   }
 
   return {

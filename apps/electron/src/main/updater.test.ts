@@ -26,6 +26,18 @@ function createBroadcaster(): UpdaterBroadcaster & {
   };
 }
 
+function createDeferred(): {
+  promise: Promise<void>;
+  resolve: () => void;
+} {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+
+  return { promise, resolve };
+}
+
 describe("createUpdaterController", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -151,6 +163,39 @@ describe("createUpdaterController", () => {
     expect(updater.quitAndInstall).toHaveBeenCalledWith(false, true);
     expect(broadcaster.sent).toMatchObject([
       { state: "downloaded", version: "0.1.1" },
+    ]);
+  });
+
+  it("shares an in-flight manual check", async () => {
+    const updater = new FakeUpdater();
+    const deferred = createDeferred();
+    updater.checkForUpdates.mockImplementation(async () => {
+      updater.emit("checking-for-update");
+      await deferred.promise;
+      updater.emit("update-not-available", { version: "0.0.0" });
+    });
+    const broadcaster = createBroadcaster();
+    const controller = createUpdaterController({
+      broadcaster,
+      isPackaged: true,
+      updater,
+    });
+
+    const firstCheck = controller.checkNow();
+    const secondCheck = controller.checkNow();
+
+    expect(updater.checkForUpdates).toHaveBeenCalledTimes(1);
+    expect(broadcaster.sent).toMatchObject([{ state: "checking" }]);
+
+    deferred.resolve();
+
+    await expect(Promise.all([firstCheck, secondCheck])).resolves.toMatchObject([
+      { state: "not-available", version: "0.0.0" },
+      { state: "not-available", version: "0.0.0" },
+    ]);
+    expect(broadcaster.sent).toMatchObject([
+      { state: "checking" },
+      { state: "not-available", version: "0.0.0" },
     ]);
   });
 
