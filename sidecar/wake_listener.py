@@ -131,27 +131,30 @@ def text_contains_wake_token(text, distinctive_tokens):
     return False
 
 
-class LivekitEngine:
-    """livekit-wakeword ONNX classifier over a trailing 2 s window."""
+class OpenWakeWordEngine:
+    """openWakeWord ONNX classifier (Stage-1 candidate detector). Feeds 80 ms
+    (1280-sample) frames; the model keeps its own feature buffers, so — unlike the
+    retired livekit engine — there is no external trailing window here."""
 
-    FRAME = 1280  # 80 ms
-    WINDOW_FRAMES = 25  # 2 s trailing window
+    FRAME = 1280  # 80 ms @ 16 kHz
+    COOLDOWN_FRAMES = 25  # ~2 s — don't re-fire on the same utterance
 
     def __init__(self, model_path, threshold):
-        from livekit.wakeword import WakeWordModel
+        from openwakeword.model import Model
 
-        self.model = WakeWordModel(models=[model_path])
+        self.model = Model(wakeword_models=[model_path], inference_framework="onnx")
+        # Key the prediction dict by whatever name openWakeWord derived from the file.
+        self.key = next(iter(self.model.models.keys()))
         self.threshold = threshold
-        self.reset()
-
-    def reset(self):
-        self._buf = deque(
-            [np.zeros(self.FRAME, dtype=np.int16)] * self.WINDOW_FRAMES,
-            maxlen=self.WINDOW_FRAMES,
-        )
         self._leftover = np.zeros(0, dtype=np.int16)
         self._cooldown = 0
         self._peak = 0.0  # running max of the current candidate burst (for dlog)
+
+    def reset(self):
+        self.model.reset()
+        self._leftover = np.zeros(0, dtype=np.int16)
+        self._cooldown = 0
+        self._peak = 0.0
 
     def feed(self, pcm_bytes):
         chunk = np.frombuffer(pcm_bytes, dtype=np.int16)
@@ -160,16 +163,15 @@ class LivekitEngine:
         while len(self._leftover) >= self.FRAME:
             frame = self._leftover[: self.FRAME]
             self._leftover = self._leftover[self.FRAME :]
-            self._buf.append(frame)
+            # Predict EVERY frame to keep openWakeWord's internal buffers warm,
+            # even while cooling down.
+            scores = self.model.predict(frame)
+            score = float(scores.get(self.key, 0.0))
             if self._cooldown > 0:
                 self._cooldown -= 1
                 continue
-            scores = self.model.predict(np.concatenate(list(self._buf)))
-            score = max(scores.values()) if scores else 0.0
-            # Report the PEAK score of each candidate burst — including ones that
-            # never reach threshold — so real-voice recall is observable. A miss
-            # logged as "peak score=0.48" with threshold 0.45 fires; at 0.6 it
-            # would have been silently dropped (the "ask 2-3 times" symptom).
+            # Report the PEAK score of each candidate burst (including ones that
+            # never reach threshold) so real-voice recall stays observable.
             if score >= self._peak:
                 self._peak = score
             elif self._peak >= 0.30 and score < self._peak * 0.6:
@@ -177,7 +179,7 @@ class LivekitEngine:
                 self._peak = 0.0
             if score >= self.threshold:
                 woke = True
-                self._cooldown = self.WINDOW_FRAMES  # don't re-fire on the same utterance
+                self._cooldown = self.COOLDOWN_FRAMES
                 dlog(f"wake: FIRED score={score:.3f} threshold={self.threshold}")
                 self._peak = 0.0
         return woke
