@@ -133,8 +133,8 @@ def text_contains_wake_token(text, distinctive_tokens):
 
 class OpenWakeWordEngine:
     """openWakeWord ONNX classifier (Stage-1 candidate detector). Feeds 80 ms
-    (1280-sample) frames; the model keeps its own feature buffers, so — unlike the
-    retired livekit engine — there is no external trailing window here."""
+    (1280-sample) frames; the model keeps its own feature buffers internally,
+    so there is no external trailing window here."""
 
     FRAME = 1280  # 80 ms @ 16 kHz
     COOLDOWN_FRAMES = 25  # ~2 s — don't re-fire on the same utterance
@@ -257,7 +257,7 @@ class TwoStageEngine:
     never force-maps a near-miss onto the wake word, and a false wake needs BOTH
     stages wrong."""
 
-    FRAME = 1280  # 80 ms @ 16 kHz, matches LivekitEngine
+    FRAME = 1280  # 80 ms @ 16 kHz, matches OpenWakeWordEngine
     RING_FRAMES = 50  # ~4.0 s trailing window (pre-roll + word + post-trigger)
     # Audio collected AFTER stage-1 fires, so the full wake word is in the ring
     # before Stage-2 decodes. This is the main wake-LATENCY knob and trades ONLY
@@ -343,35 +343,21 @@ def build_engine(args, wake_words):
             HERE, "models", "vosk-model-small-en-us-0.15"
         )
         return VoskEngine(model, wake_words, args.min_confidence), f"vosk:{model}"
-    if args.engine == "livekit":
-        model = args.model or os.environ.get(
-            "FAMILYHUB_WAKE_MODEL", os.path.join(HERE, "james.onnx")
-        )
-        return (
-            LivekitEngine(model, args.threshold),
-            f"livekit:{model}@{args.threshold}",
-        )
-    # twostage (default)
+    # twostage (default): openWakeWord Stage-1 → Moonshine Stage-2 confirm.
     model = args.model or os.environ.get(
-        "FAMILYHUB_WAKE_MODEL", os.path.join(HERE, "james.onnx")
+        "FAMILYHUB_WAKE_MODEL", os.path.join(HERE, "models", "hey_james.onnx")
     )
-    # Prefer the larger lgraph model for a better Stage-2 confirm in noise
-    # (~200 MB, fits the 16 GB appliance); fall back to the small model if absent.
-    default_vosk = os.path.join(HERE, "models", "vosk-model-en-us-0.22-lgraph")
-    if not os.path.isdir(default_vosk):
-        default_vosk = os.path.join(HERE, "models", "vosk-model-small-en-us-0.15")
-    vosk_model = args.vosk_model or os.environ.get("FAMILYHUB_VOSK_MODEL", default_vosk)
-    # Stage 2 matches the DISTINCTIVE token(s) (default just "james"), not the full
-    # "hey james": the small model reliably hears "james" (conf ~1.0) but mangles
-    # the filler "hey" → "a", so requiring "hey" vetoes real wakes for no precision
-    # gain (Stage 1 already required the full phrase acoustically, and "cames"/
-    # "games" still fail because the WORD differs).
+    moonshine_dir = os.environ.get(
+        "FAMILYHUB_MOONSHINE_MODEL",
+        os.path.join(HERE, "models", "sherpa-onnx-moonshine-tiny-en-int8"),
+    )
+    confirm_tokens = [t.lower() for t in args.confirm_phrase.split() if t]
     engine = TwoStageEngine(
-        model, args.threshold, vosk_model, args.confirm_phrase, args.confirm_confidence
+        model, args.threshold, MoonshineConfirmer(moonshine_dir), confirm_tokens
     )
     description = (
-        f"twostage: emit='{args.wake_phrase}' confirm='{args.confirm_phrase}' "
-        f"s1={args.threshold} s2={args.confirm_confidence}"
+        f"twostage: emit='{args.wake_phrase}' confirm={confirm_tokens} "
+        f"s1={args.threshold} (openWakeWord→Moonshine)"
     )
     return engine, description
 
@@ -380,17 +366,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--engine",
-        choices=["twostage", "livekit", "vosk"],
+        choices=["twostage", "vosk"],
         default=os.environ.get("FAMILYHUB_WAKE_ENGINE", "twostage"),
     )
     parser.add_argument("--wake-words", default=DEFAULT_WAKE_WORDS)
-    parser.add_argument("--model", default=None, help="livekit ONNX classifier path")
+    parser.add_argument("--model", default=None, help="openWakeWord ONNX classifier path")
     parser.add_argument(
         "--threshold",
         type=float,
         default=float(os.environ.get("FAMILYHUB_WAKE_THRESHOLD", "0.5")),
-        help="stage-1 candidate threshold; tuned low for two-stage recall. "
-        "Pass higher (e.g. 0.8) for a standalone --engine livekit.",
+        help="stage-1 openWakeWord candidate threshold; tuned low for two-stage recall.",
     )
     parser.add_argument(
         "--wake-phrase",
@@ -404,11 +389,6 @@ def main():
         "default 'james' (the filler 'hey' is unreliable in ASR and adds no "
         "precision since Stage 1 already gates the full phrase acoustically)",
     )
-    parser.add_argument(
-        "--confirm-confidence",
-        type=float,
-        default=float(os.environ.get("FAMILYHUB_WAKE_CONFIRM_CONFIDENCE", "0.6")),
-    )
     parser.add_argument("--vosk-model", default=None)
     parser.add_argument("--min-confidence", type=float, default=0.7)
     args = parser.parse_args()
@@ -421,10 +401,10 @@ def main():
 
     # Emit the FULL wake phrase ("hey james") on every engine, not the bare
     # keyword. The Electron side gates each wake with transcriptContainsWakePhrase
-    # against ["hey james"], so emitting bare "james" (old livekit/vosk behavior)
-    # is silently rejected downstream and the assistant never wakes. james.onnx is
-    # trained on the whole "hey james" utterance, so a Stage-1 fire genuinely means
-    # the phrase was heard — emitting it is honest, not a rubber stamp.
+    # against ["hey james"], so emitting bare "james" (old vosk behavior)
+    # is silently rejected downstream and the assistant never wakes. hey_james.onnx is
+    # trained on the whole "hey james" utterance (openWakeWord), so a Stage-1 fire
+    # genuinely means the phrase was heard — emitting it is honest, not a rubber stamp.
     wake_text = args.wake_phrase
 
     # readline() (not `for line in sys.stdin`) avoids block read-ahead.
