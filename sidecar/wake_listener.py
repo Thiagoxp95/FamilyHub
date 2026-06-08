@@ -150,15 +150,24 @@ class OpenWakeWordEngine:
         from openwakeword.model import Model
 
         self.model = Model(wakeword_models=[model_path], inference_framework="onnx")
-        # Key the prediction dict by whatever name openWakeWord derived from the file.
-        self.key = next(iter(self.model.models.keys()))
+        self.model_path = model_path
         self.threshold = threshold
         self._leftover = np.zeros(0, dtype=np.int16)
         self._cooldown = 0
         self._peak = 0.0  # running max of the current candidate burst (for dlog)
 
     def reset(self):
-        self.model.reset()
+        # openWakeWord's Model.reset() is version-dependent; fall back to
+        # re-instantiating so the {"cmd":"reset"} IPC path never crashes.
+        reset_fn = getattr(self.model, "reset", None)
+        if callable(reset_fn):
+            reset_fn()
+        else:
+            from openwakeword.model import Model
+
+            self.model = Model(
+                wakeword_models=[self.model_path], inference_framework="onnx"
+            )
         self._leftover = np.zeros(0, dtype=np.int16)
         self._cooldown = 0
         self._peak = 0.0
@@ -173,7 +182,11 @@ class OpenWakeWordEngine:
             # Predict EVERY frame to keep openWakeWord's internal buffers warm,
             # even while cooling down.
             scores = self.model.predict(frame)
-            score = float(scores.get(self.key, 0.0))
+            # Take the max over all loaded wake models rather than keying by a
+            # filename-derived name (which is openWakeWord-version-dependent and
+            # would silently never fire on a mismatch). Only one model is loaded,
+            # so this is just a robust read of its score.
+            score = max((float(v) for v in scores.values()), default=0.0)
             if self._cooldown > 0:
                 self._cooldown -= 1
                 continue
@@ -392,7 +405,7 @@ def main():
     parser.add_argument(
         "--confirm-phrase",
         default=os.environ.get("FAMILYHUB_WAKE_CONFIRM_PHRASE", "james"),
-        help="distinctive token(s) Stage-2 Vosk must actually hear to confirm; "
+        help="distinctive token(s) Stage-2 Moonshine must actually hear to confirm; "
         "default 'james' (the filler 'hey' is unreliable in ASR and adds no "
         "precision since Stage 1 already gates the full phrase acoustically)",
     )
