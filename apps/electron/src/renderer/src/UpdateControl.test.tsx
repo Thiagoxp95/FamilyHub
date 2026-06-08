@@ -3,26 +3,30 @@ import { describe, expect, it } from "vitest";
 import { UpdateControlView } from "./UpdateControl";
 
 describe("UpdateControlView", () => {
-  it("renders nothing when idle or up to date", () => {
-    expect(
-      renderToStaticMarkup(
-        <UpdateControlView
-          status={{ state: "idle" }}
-          onCheck={() => undefined}
-          onInstall={() => undefined}
-        />,
-      ),
-    ).toBe("");
+  it("shows a check button when idle", () => {
+    const html = renderToStaticMarkup(
+      <UpdateControlView
+        status={{ state: "idle" }}
+        onCheck={() => undefined}
+        onInstall={() => undefined}
+      />,
+    );
 
-    expect(
-      renderToStaticMarkup(
-        <UpdateControlView
-          status={{ state: "not-available" }}
-          onCheck={() => undefined}
-          onInstall={() => undefined}
-        />,
-      ),
-    ).toBe("");
+    expect(html).toContain("Check for updates");
+    expect(html).not.toContain("Up to date");
+  });
+
+  it("shows up-to-date with a check button when not available", () => {
+    const html = renderToStaticMarkup(
+      <UpdateControlView
+        status={{ state: "not-available" }}
+        onCheck={() => undefined}
+        onInstall={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("Up to date");
+    expect(html).toContain("Check for updates");
   });
 
   it("shows progress while downloading", () => {

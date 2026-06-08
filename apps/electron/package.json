@@ -1,6 +1,6 @@
 {
   "name": "@family-hub/electron",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "private": true,
   "type": "module",
   "main": "./out/main/index.js",
@@ -10,6 +10,7 @@
     "dev:packed": "npm run package && open release/mac-arm64/FamilyHub.app",
     "dist": "npm run build && electron-builder",
     "dist:mac:arm64": "npm run build && electron-builder --mac --arm64",
+    "dmg": "npm run build && electron-builder --mac dmg --arm64 --publish never",
     "release:mac:arm64": "npm run build && electron-builder --mac --arm64 --publish always",
     "lint": "eslint . --max-warnings=0",
     "package": "npm run build && electron-builder --dir",

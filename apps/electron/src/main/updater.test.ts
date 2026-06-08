@@ -246,7 +246,7 @@ describe("createUpdaterController", () => {
     ]);
   });
 
-  it("stores updater errors without throwing", () => {
+  it("swallows background-check errors and stays idle", () => {
     const updater = new FakeUpdater();
     const broadcaster = createBroadcaster();
     const controller = createUpdaterController({
@@ -255,12 +255,72 @@ describe("createUpdaterController", () => {
       updater,
     });
 
+    // A background poll / launch check has no user behind it — an unreachable
+    // feed (or a sideloaded build with no app-update.yml) must not paint a red
+    // banner on the kitchen display.
     updater.emit("error", new Error("network failed"));
+
+    expect(controller.getStatus()).toMatchObject({ state: "idle" });
+  });
+
+  it("surfaces errors from a user-initiated check", async () => {
+    const updater = new FakeUpdater();
+    updater.checkForUpdates = vi.fn(async () => {
+      updater.emit("error", new Error("network failed"));
+    });
+    const broadcaster = createBroadcaster();
+    const controller = createUpdaterController({
+      broadcaster,
+      isPackaged: true,
+      updater,
+    });
+
+    await controller.checkNow();
 
     expect(controller.getStatus()).toMatchObject({
       error: "network failed",
       state: "error",
     });
+  });
+
+  it("stays silent for a missing update feed even on a user-initiated check", async () => {
+    const updater = new FakeUpdater();
+    updater.checkForUpdates = vi.fn(async () => {
+      const error = new Error(
+        "ENOENT: no such file or directory, open '/app/Resources/app-update.yml'",
+      );
+      (error as NodeJS.ErrnoException).code = "ENOENT";
+      updater.emit("error", error);
+    });
+    const broadcaster = createBroadcaster();
+    const controller = createUpdaterController({
+      broadcaster,
+      isPackaged: true,
+      updater,
+    });
+
+    await controller.checkNow();
+
+    expect(controller.getStatus()).toMatchObject({ state: "idle" });
+    expect(broadcaster.sent).not.toContainEqual(
+      expect.objectContaining({ state: "error" }),
+    );
+  });
+
+  it("resets to silent after a user-initiated check resolves", async () => {
+    const updater = new FakeUpdater();
+    const broadcaster = createBroadcaster();
+    const controller = createUpdaterController({
+      broadcaster,
+      isPackaged: true,
+      updater,
+    });
+
+    await controller.checkNow();
+    // A later background error must not inherit the prior click's loud state.
+    updater.emit("error", new Error("network failed"));
+
+    expect(controller.getStatus()).toMatchObject({ state: "idle" });
   });
 });
 

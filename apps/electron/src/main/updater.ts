@@ -1,5 +1,9 @@
 import { BrowserWindow, ipcMain, type IpcMain } from "electron";
-import { autoUpdater } from "electron-updater";
+// `electron-updater` is CommonJS; a named ESM import resolves to undefined in the
+// packaged build and crashes on launch. Import the default and read `autoUpdater`
+// lazily (in the IPC default param) so its getter only fires inside a real
+// Electron main process, never at module load (which would break tests).
+import electronUpdater from "electron-updater";
 
 const updaterStatusChannel = "updater:status";
 const updateCheckIntervalMs = 6 * 60 * 60 * 1000;
@@ -58,6 +62,22 @@ export function createUpdaterController({
   let intervalId: NodeJS.Timeout | null = null;
   let checkPromise: Promise<UpdaterStatus> | null = null;
   let startPromise: Promise<void> | null = null;
+  // Background checks (launch + 6h poll) must fail seamlessly on an always-on
+  // kitchen display — a sideloaded build has no update feed and GitHub can blip.
+  // Only surface the loud red error state when the user explicitly asked.
+  let userInitiatedCheck = false;
+
+  function publishCheckError(error: unknown): void {
+    // A missing app-update.yml means this build has no update feed at all
+    // (sideloaded / `--dir` build, never published). That's not a failure worth
+    // showing — stay silent even on a manual click. Real failures (network,
+    // signature, etc.) still go loud when the user explicitly asked.
+    if (userInitiatedCheck && !isMissingFeedConfig(error)) {
+      publish({ state: "error", error: readError(error) });
+    } else {
+      publish({ state: "idle" });
+    }
+  }
 
   function publish(next: UpdaterStatus): UpdaterStatus {
     if (!isPackaged) {
@@ -114,12 +134,17 @@ export function createUpdaterController({
     publish(withVersion("downloaded", readVersion(info)));
   });
   updater.on("error", (error) => {
-    publish({ state: "error", error: readError(error) });
+    publishCheckError(error);
   });
 
-  async function checkNow(): Promise<UpdaterStatus> {
+  async function checkNow(userInitiated: boolean): Promise<UpdaterStatus> {
     if (!isPackaged || status.state === "downloaded") {
       return status;
+    }
+
+    // A manual click during an in-flight background check upgrades it to loud.
+    if (userInitiated) {
+      userInitiatedCheck = true;
     }
 
     if (checkPromise) {
@@ -130,7 +155,7 @@ export function createUpdaterController({
       try {
         await updater.checkForUpdates();
       } catch (error) {
-        publish({ state: "error", error: readError(error) });
+        publishCheckError(error);
       }
 
       return status;
@@ -140,12 +165,13 @@ export function createUpdaterController({
       return await checkPromise;
     } finally {
       checkPromise = null;
+      userInitiatedCheck = false;
     }
   }
 
   return {
     async checkNow() {
-      return checkNow();
+      return checkNow(true);
     },
     getStatus() {
       return status;
@@ -167,9 +193,9 @@ export function createUpdaterController({
       }
 
       startPromise = (async () => {
-        await checkNow();
+        await checkNow(false);
         intervalId = setInterval(() => {
-          void checkNow();
+          void checkNow(false);
         }, updateCheckIntervalMs);
         intervalId.unref?.();
       })();
@@ -183,7 +209,7 @@ export function registerUpdaterIpc({
   appIsPackaged,
   getAllWindows = () => BrowserWindow.getAllWindows(),
   ipc = ipcMain,
-  updater = autoUpdater as unknown as UpdaterAdapter,
+  updater = electronUpdater.autoUpdater as unknown as UpdaterAdapter,
 }: {
   appIsPackaged: boolean;
   getAllWindows?: () => UpdaterWindow[];
@@ -217,4 +243,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readError(error: unknown): string {
   return error instanceof Error ? error.message : "Update failed.";
+}
+
+function isMissingFeedConfig(error: unknown): boolean {
+  if (isRecord(error) && error.code === "ENOENT") {
+    return true;
+  }
+
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return message.includes("app-update.yml");
 }

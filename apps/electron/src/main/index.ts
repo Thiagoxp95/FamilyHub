@@ -23,6 +23,11 @@ loadMainEnvironment();
 
 function createMainWindow(): void {
   const mainWindow = new BrowserWindow({
+    // Seamless dark chrome: hide the solid title bar and paint the window the
+    // same base color as the app so there's no grey strip at the top. Traffic
+    // lights stay (inset) so the window is still movable/closable.
+    backgroundColor: "#08080d",
+    titleBarStyle: "hiddenInset",
     height: 1500,
     minHeight: 720,
     minWidth: 480,
@@ -56,8 +61,8 @@ app.whenReady().then(async () => {
   configureMediaPermissions(session.defaultSession);
   await requestMicrophoneAccess({ systemPreferences });
   ipcMain.handle("app:ping", () => "pong");
-  const dashboard = registerDashboardIpc();
-  registerAssistantIpc(app.getPath("userData"), dashboard);
+  const dashboard = registerDashboardIpc(app.getPath("userData"));
+  registerAssistantIpc(dashboard);
   const updater = registerUpdaterIpc({ appIsPackaged: app.isPackaged });
   void updater.start();
   createMainWindow();

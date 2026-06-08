@@ -14,8 +14,10 @@ export function UpdateControl(): React.JSX.Element {
         }
       })
       .catch(() => {
+        // Backend not reachable (e.g. auto-updater disabled) — stay hidden and
+        // seamless rather than showing a red error in the header.
         if (mounted) {
-          setStatus({ state: "error", error: "Unable to read update status." });
+          setStatus({ state: "idle" });
         }
       });
 
@@ -97,6 +99,13 @@ export function UpdateControlView({
       );
     case "idle":
     case "not-available":
-      return null;
+      return (
+        <div className="update-control" role="status">
+          {status.state === "not-available" ? <span>Up to date</span> : null}
+          <button className="secondary-button" onClick={onCheck} type="button">
+            Check for updates
+          </button>
+        </div>
+      );
   }
 }
