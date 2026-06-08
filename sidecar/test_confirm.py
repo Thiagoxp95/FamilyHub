@@ -8,7 +8,7 @@ Exits 0 if all cases pass, 1 otherwise.
 
 import sys
 
-from wake_listener import phrase_confirmed
+from wake_listener import phrase_confirmed, text_contains_wake_token
 
 HEY_JAMES = ["hey", "james"]
 MIN_CONF = 0.6
@@ -38,6 +38,26 @@ CASES = [
 ]
 
 
+def test_text_match():
+    # exact
+    assert text_contains_wake_token("hey james", ["james"]) is True
+    # alias from gating.ts list
+    assert text_contains_wake_token("hey jaymes", ["james"]) is True
+    assert text_contains_wake_token("a hames", ["james"]) is True
+    # whole-word only — substrings of other words must not match
+    assert text_contains_wake_token("hey jameson", ["james"]) is False
+    assert text_contains_wake_token("what are their names", ["james"]) is False
+    # near-misses the model would decode differently
+    assert text_contains_wake_token("hey jason", ["james"]) is False
+    assert text_contains_wake_token("hey games", ["james"]) is False
+    assert text_contains_wake_token("hey cames", ["james"]) is False
+    # punctuation / case
+    assert text_contains_wake_token("Hey, JAMES!", ["james"]) is True
+    # empty
+    assert text_contains_wake_token("", ["james"]) is False
+    print("text_contains_wake_token: ok")
+
+
 def main():
     ok = True
     for label, words, phrase, expected in CASES:
@@ -47,6 +67,11 @@ def main():
             ok = False
         print(f"  {status:4} {label:34} expected={expected} got={got}")
     print("\nPASS" if ok else "\nFAIL")
+    try:
+        test_text_match()
+    except AssertionError as exc:
+        print(f"FAIL test_text_match: {exc}")
+        ok = False
     return 0 if ok else 1
 
 

@@ -34,6 +34,7 @@ emitted only when one is confidently detected.
 
 import argparse
 import base64
+import datetime
 import json
 import os
 import sys
@@ -44,6 +45,23 @@ import numpy as np
 SAMPLE_RATE = 16000
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_WAKE_WORDS = "james"
+
+# Diagnostic log, written regardless of dev vs packaged build (stderr is awkward
+# to capture from a packaged Electron child). Correlate timestamps with
+# ~/.familyhub/live-debug.log to see, per attempt: did the wake fire, did the
+# Gemini session open, did it survive. Best effort — never breaks the wake path.
+DEBUG_LOG = os.path.join(os.path.expanduser("~"), ".familyhub", "wake-debug.log")
+
+
+def dlog(message):
+    line = f"{datetime.datetime.now().isoformat()} {message}"
+    print(line, file=sys.stderr, flush=True)
+    try:
+        os.makedirs(os.path.dirname(DEBUG_LOG), exist_ok=True)
+        with open(DEBUG_LOG, "a") as handle:
+            handle.write(line + "\n")
+    except OSError:
+        pass
 
 
 def emit(message):
@@ -75,6 +93,29 @@ def phrase_confirmed(words, phrase_tokens, min_confidence):
     return False
 
 
+# Curated ASR mis-hearings of the distinctive wake token, mirroring the alias
+# set in apps/electron/src/main/assistant/gating.ts so the sidecar's Stage-2
+# confirm and the Electron-side gate agree on which near-misses count.
+WAKE_TOKEN_ALIASES = {
+    "james": ("james", "jaymes", "jaimes", "jamez", "jaymz", "hames", "jaymez"),
+}
+
+
+def text_contains_wake_token(text, distinctive_tokens):
+    """True iff any distinctive token (or a curated alias of it) appears as a
+    WHOLE word in a free-decode transcript. Whole-word, not substring, so
+    'jameson'/'names' do not match."""
+    normalized = "".join(
+        c if (c.isalnum() or c.isspace()) else " " for c in text.lower()
+    )
+    words = set(normalized.split())
+    for token in distinctive_tokens:
+        for alias in WAKE_TOKEN_ALIASES.get(token, (token,)):
+            if alias in words:
+                return True
+    return False
+
+
 class LivekitEngine:
     """livekit-wakeword ONNX classifier over a trailing 2 s window."""
 
@@ -95,6 +136,7 @@ class LivekitEngine:
         )
         self._leftover = np.zeros(0, dtype=np.int16)
         self._cooldown = 0
+        self._peak = 0.0  # running max of the current candidate burst (for dlog)
 
     def feed(self, pcm_bytes):
         chunk = np.frombuffer(pcm_bytes, dtype=np.int16)
@@ -108,9 +150,21 @@ class LivekitEngine:
                 self._cooldown -= 1
                 continue
             scores = self.model.predict(np.concatenate(list(self._buf)))
-            if scores and max(scores.values()) >= self.threshold:
+            score = max(scores.values()) if scores else 0.0
+            # Report the PEAK score of each candidate burst — including ones that
+            # never reach threshold — so real-voice recall is observable. A miss
+            # logged as "peak score=0.48" with threshold 0.45 fires; at 0.6 it
+            # would have been silently dropped (the "ask 2-3 times" symptom).
+            if score >= self._peak:
+                self._peak = score
+            elif self._peak >= 0.30 and score < self._peak * 0.6:
+                dlog(f"wake: candidate peak score={self._peak:.3f} threshold={self.threshold} (no fire)")
+                self._peak = 0.0
+            if score >= self.threshold:
                 woke = True
                 self._cooldown = self.WINDOW_FRAMES  # don't re-fire on the same utterance
+                dlog(f"wake: FIRED score={score:.3f} threshold={self.threshold}")
+                self._peak = 0.0
         return woke
 
 
@@ -164,9 +218,13 @@ class TwoStageEngine:
 
     FRAME = 1280  # 80 ms @ 16 kHz, matches LivekitEngine
     RING_FRAMES = 50  # ~4.0 s trailing window (pre-roll + word + post-trigger)
-    POST_TRIGGER_FRAMES = 13  # ~1.04 s collected AFTER stage-1 fires, so the full
-    # wake word is in the ring before Stage-2 decodes (fixes both the truncation
-    # false-wakes and the "fired during 'hey'" misses).
+    # Audio collected AFTER stage-1 fires, so the full wake word is in the ring
+    # before Stage-2 decodes. This is the main wake-LATENCY knob and trades ONLY
+    # against recall (too short → "james" truncated → real wake VETOED, shows as
+    # heard='hey ja' in the log), NOT against false positives (the word-check is
+    # unaffected by timing). Tune via FAMILYHUB_WAKE_POST_TRIGGER_MS; was 1040 ms.
+    DEFAULT_POST_TRIGGER_MS = 640
+    CONFIRM_DECODE_FRAMES = 25  # ~2 s tail decoded by Stage 2 (word + post-trigger)
 
     def __init__(self, model_path, threshold, vosk_model_path, phrase, min_confidence):
         from vosk import Model, SetLogLevel
@@ -176,6 +234,10 @@ class TwoStageEngine:
         self.vosk_model = Model(vosk_model_path)
         self.phrase_tokens = [t.lower() for t in phrase.split() if t]
         self.min_conf = min_confidence
+        post_trigger_ms = float(
+            os.environ.get("FAMILYHUB_WAKE_POST_TRIGGER_MS", self.DEFAULT_POST_TRIGGER_MS)
+        )
+        self.post_trigger_samples = int(SAMPLE_RATE * post_trigger_ms / 1000)
         self.rejected = 0
         self.reset()
 
@@ -207,10 +269,24 @@ class TwoStageEngine:
 
         rec = KaldiRecognizer(self.vosk_model, SAMPLE_RATE)
         rec.SetWords(True)
-        audio = np.concatenate(list(self.ring)).astype(np.int16).tobytes()
+        # Decode only the last ~2 s (the wake word + post-trigger), NOT the full
+        # 4 s ring: older pre-roll audio just gives the small model room to
+        # hallucinate a whole sentence ("i mean that a games"), which both hides
+        # the wake word and slows the decode. The word always lands in this tail.
+        tail = list(self.ring)[-self.CONFIRM_DECODE_FRAMES :]
+        audio = np.concatenate(tail).astype(np.int16).tobytes()
         rec.AcceptWaveform(audio)
         result = json.loads(rec.FinalResult())
-        return phrase_confirmed(result.get("result", []), self.phrase_tokens, self.min_conf)
+        # Capture what Stage 2 actually heard so a veto is diagnosable: "wrong word"
+        # (model mis-transcribed james → tune nothing, need a better model/alias) vs
+        # "low confidence" (correct word, tune confirm-confidence) vs "correct
+        # reject" (really was hey cames). Stored for the feed() log line.
+        words = result.get("result", [])
+        self._last_heard = "heard='{}' [{}]".format(
+            result.get("text", ""),
+            " ".join(f"{w.get('word')}:{w.get('conf', 0.0):.2f}" for w in words),
+        )
+        return phrase_confirmed(words, self.phrase_tokens, self.min_conf)
 
     def feed(self, pcm_bytes):
         self._push_ring(pcm_bytes)
@@ -221,19 +297,23 @@ class TwoStageEngine:
             self._collecting_samples -= len(np.frombuffer(pcm_bytes, dtype=np.int16))
             if self._collecting_samples <= 0:
                 self._collecting_samples = 0
+                self._last_heard = ""
                 if self._confirm():
+                    dlog(f"wake: stage-2 confirmed candidate — {self._last_heard}")
                     return True
                 self.rejected += 1
-                print(
-                    f"wake: stage-2 vetoed candidate (rejected={self.rejected})",
-                    file=sys.stderr,
-                    flush=True,
+                # Log to the debug FILE (not just stderr): a Stage-1 "FIRED" that
+                # Stage 2 then vetoes is the silent "I said it and nothing happened"
+                # miss. Including what Stage 2 HEARD tells real-wake vetoes apart
+                # from correct "hey cames" rejects without guessing.
+                dlog(
+                    f"wake: stage-2 VETOED candidate (rejected={self.rejected}) — {self._last_heard}"
                 )
             return False
         # Stage 1 is intentionally not fed during collection: its own cooldown
         # holds, so it won't re-fire on the same utterance (~3 s effective gap).
         if self.stage1.feed(pcm_bytes):  # Stage-1 candidate → collect rest of word
-            self._collecting_samples = self.POST_TRIGGER_FRAMES * self.FRAME
+            self._collecting_samples = self.post_trigger_samples
         return False
 
 
@@ -261,12 +341,17 @@ def build_engine(args, wake_words):
     if not os.path.isdir(default_vosk):
         default_vosk = os.path.join(HERE, "models", "vosk-model-small-en-us-0.15")
     vosk_model = args.vosk_model or os.environ.get("FAMILYHUB_VOSK_MODEL", default_vosk)
+    # Stage 2 matches the DISTINCTIVE token(s) (default just "james"), not the full
+    # "hey james": the small model reliably hears "james" (conf ~1.0) but mangles
+    # the filler "hey" → "a", so requiring "hey" vetoes real wakes for no precision
+    # gain (Stage 1 already required the full phrase acoustically, and "cames"/
+    # "games" still fail because the WORD differs).
     engine = TwoStageEngine(
-        model, args.threshold, vosk_model, args.wake_phrase, args.confirm_confidence
+        model, args.threshold, vosk_model, args.confirm_phrase, args.confirm_confidence
     )
     description = (
-        f"twostage:'{args.wake_phrase}' s1={args.threshold} "
-        f"s2={args.confirm_confidence}"
+        f"twostage: emit='{args.wake_phrase}' confirm='{args.confirm_phrase}' "
+        f"s1={args.threshold} s2={args.confirm_confidence}"
     )
     return engine, description
 
@@ -276,21 +361,28 @@ def main():
     parser.add_argument(
         "--engine",
         choices=["twostage", "livekit", "vosk"],
-        default=os.environ.get("FAMILYHUB_WAKE_ENGINE", "livekit"),
+        default=os.environ.get("FAMILYHUB_WAKE_ENGINE", "twostage"),
     )
     parser.add_argument("--wake-words", default=DEFAULT_WAKE_WORDS)
     parser.add_argument("--model", default=None, help="livekit ONNX classifier path")
     parser.add_argument(
         "--threshold",
         type=float,
-        default=float(os.environ.get("FAMILYHUB_WAKE_THRESHOLD", "0.82")),
+        default=float(os.environ.get("FAMILYHUB_WAKE_THRESHOLD", "0.5")),
         help="stage-1 candidate threshold; tuned low for two-stage recall. "
         "Pass higher (e.g. 0.8) for a standalone --engine livekit.",
     )
     parser.add_argument(
         "--wake-phrase",
         default=os.environ.get("FAMILYHUB_WAKE_PHRASE", "hey james"),
-        help="two-stage Stage-2 confirmation phrase",
+        help="phrase EMITTED to Electron on a confirmed wake (gate expects this)",
+    )
+    parser.add_argument(
+        "--confirm-phrase",
+        default=os.environ.get("FAMILYHUB_WAKE_CONFIRM_PHRASE", "james"),
+        help="distinctive token(s) Stage-2 Vosk must actually hear to confirm; "
+        "default 'james' (the filler 'hey' is unreliable in ASR and adds no "
+        "precision since Stage 1 already gates the full phrase acoustically)",
     )
     parser.add_argument(
         "--confirm-confidence",
@@ -305,9 +397,15 @@ def main():
     engine, description = build_engine(args, wake_words)
 
     emit({"type": "partial", "text": "", "words": []})  # ready signal
-    print(f"wake engine: {description}", file=sys.stderr, flush=True)
+    dlog(f"wake engine: {description}")
 
-    wake_text = args.wake_phrase if args.engine == "twostage" else wake_words[0]
+    # Emit the FULL wake phrase ("hey james") on every engine, not the bare
+    # keyword. The Electron side gates each wake with transcriptContainsWakePhrase
+    # against ["hey james"], so emitting bare "james" (old livekit/vosk behavior)
+    # is silently rejected downstream and the assistant never wakes. james.onnx is
+    # trained on the whole "hey james" utterance, so a Stage-1 fire genuinely means
+    # the phrase was heard — emitting it is honest, not a rubber stamp.
+    wake_text = args.wake_phrase
 
     # readline() (not `for line in sys.stdin`) avoids block read-ahead.
     while True:
