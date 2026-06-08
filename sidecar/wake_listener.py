@@ -1,26 +1,33 @@
 #!/usr/bin/env python3
 """FamilyHub wake-word sidecar.
 
-A dedicated keyword spotter for the wake phrase (default "hey james"), with three
+A dedicated keyword spotter for the wake phrase (default "hey james"), with two
 interchangeable engines (select via --engine or FAMILYHUB_WAKE_ENGINE):
 
-  twostage (default): two stages. Stage 1 is a custom livekit-wakeword ONNX model
-    (james.onnx) that cheaply flags "james"-ish candidates with high recall.
-    Because james.onnx fires before the word finishes, Stage 2 first collects a
-    short post-trigger window (so the FULL phrase is buffered) and then runs a
-    FREE (unconstrained) Vosk decode, confirming only if it actually hears
-    "hey james". Free decode never force-maps a near-miss ("hey jason") onto the
-    wake word, so a false wake needs both stages wrong at once.
-
-  livekit: Stage 1 alone — the james.onnx classifier over a trailing window.
-    Trigger-happy on its own; useful for debugging Stage 1 in isolation.
+  twostage (default): two stages. Stage 1 is an openWakeWord ONNX classifier
+    (models/hey_james.onnx) that cheaply flags "james"-ish candidates with high
+    recall. Because the classifier fires before the word fully lands, Stage 2
+    first collects a short post-trigger window (FAMILYHUB_WAKE_POST_TRIGGER_MS)
+    so the complete phrase is buffered, then runs a FREE (unconstrained)
+    sherpa-onnx Moonshine decode of the ~2 s tail. The Moonshine pass confirms
+    only if the transcript actually contains the distinctive word ("james" or a
+    curated alias defined by FAMILYHUB_WAKE_CONFIRM_PHRASE). Because the decode
+    is unconstrained, it never force-maps a near-miss ("hey jason") onto the wake
+    phrase — a false wake needs both stages wrong at once.
 
   vosk: Vosk ASR constrained to a ["<phrase>","[unk]"] grammar + a confidence
-    gate. Heavier model but no general-speech drift. Standalone fallback if the
+    gate. Heavier model but no general-speech drift. Offline fallback if the
     two-stage engine misbehaves in a given room.
 
-Knobs: FAMILYHUB_WAKE_THRESHOLD (stage-1 recall),
-FAMILYHUB_WAKE_CONFIRM_CONFIDENCE (stage-2 gate), FAMILYHUB_WAKE_PHRASE.
+Knobs:
+  FAMILYHUB_WAKE_ENGINE          — engine to use ("twostage" or "vosk")
+  FAMILYHUB_WAKE_THRESHOLD       — Stage-1 openWakeWord score threshold (recall)
+  FAMILYHUB_WAKE_POST_TRIGGER_MS — milliseconds of audio to buffer after Stage-1
+                                   fires before handing off to Stage-2 Moonshine
+  FAMILYHUB_WAKE_PHRASE          — full wake phrase to listen for
+  FAMILYHUB_WAKE_CONFIRM_PHRASE  — word/alias Moonshine must transcribe to confirm
+  FAMILYHUB_WAKE_MODEL           — path to the openWakeWord ONNX model file
+  FAMILYHUB_MOONSHINE_MODEL      — path to the sherpa-onnx Moonshine model
 
 Protocol (newline-delimited over stdio):
   stdin  : base64(int16 LINEAR16 @ 16 kHz mono) per line; OR a JSON control line
