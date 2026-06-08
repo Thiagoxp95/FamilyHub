@@ -1,9 +1,11 @@
-# Wake-word + speaker-lock engines. All torch-free at runtime:
-#   livekit-wakeword (default wake engine) — custom ONNX "James" model.
+# Wake-word engines. Torch-free at RUNTIME (training uses torch but is off-device):
+#   openwakeword (default Stage-1 candidate detector) — custom ONNX "hey james"
+#     model over onnxruntime; ships its own melspectrogram/embedding preprocessors.
+#   sherpa-onnx — Stage-2 confirm: a Moonshine tiny.en offline recognizer free-decodes
+#     the post-trigger tail to confirm the distinctive word was actually spoken.
 #   vosk (fallback wake engine) — offline ASR constrained to a keyword grammar.
-#   sherpa-onnx — silero VAD + speaker-embedding for the speaker hard-lock gate.
-# numpy is used by the livekit engine, the gate, and selftest.py.
-livekit-wakeword
-vosk
+# numpy is used by every engine and selftest.py.
+openwakeword
 sherpa-onnx
+vosk
 numpy

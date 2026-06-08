@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
-# Sets up the FamilyHub wake-word sidecar: a Python venv with the wake engines.
-# The default engine (livekit-wakeword) uses the committed james.onnx + feature
-# models bundled in the pip package, so it needs no model download. The Vosk
-# fallback engine needs the small English model, downloaded here.
+# Sets up the FamilyHub wake-word sidecar venv. The default twostage engine uses
+# openWakeWord (Stage-1 candidate, committed hey_james.onnx) then sherpa-onnx
+# Moonshine to confirm "hey james". Vosk is downloaded as an offline fallback engine.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-VOSK_MODEL="vosk-model-small-en-us-0.15"
-VOSK_URL="https://alphacephei.com/vosk/models/${VOSK_MODEL}.zip"
 
 # Require Python >= 3.10. Fail early with a clear message.
 if ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
@@ -24,19 +21,29 @@ fi
 ./.venv/bin/pip install --upgrade pip
 ./.venv/bin/pip install -r requirements.txt
 
-# Vosk fallback model (the default livekit engine needs no download).
 mkdir -p models
+
+# Stage-1 openWakeWord shared feature models (melspectrogram + embedding). Bundled
+# with the pip package but fetched on first use; pre-fetch so the runtime is offline.
+./.venv/bin/python -c "import openwakeword.utils as u; u.download_models()"
+
+# Stage-2 Moonshine tiny.en (sherpa-onnx int8 bundle).
+MOONSHINE="sherpa-onnx-moonshine-tiny-en-int8"
+MOONSHINE_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${MOONSHINE}.tar.bz2"
+if [ ! -d "models/${MOONSHINE}" ]; then
+  echo "Downloading Moonshine tiny.en (~50 MB)…"
+  curl -sL -o "models/${MOONSHINE}.tar.bz2" "$MOONSHINE_URL"
+  (cd models && tar xjf "${MOONSHINE}.tar.bz2" && rm -f "${MOONSHINE}.tar.bz2")
+fi
+
+# Vosk fallback model (engine=vosk only).
+VOSK_MODEL="vosk-model-small-en-us-0.15"
+VOSK_URL="https://alphacephei.com/vosk/models/${VOSK_MODEL}.zip"
 if [ ! -d "models/${VOSK_MODEL}" ]; then
   echo "Downloading Vosk fallback model (~40 MB)…"
   curl -sL -o "models/${VOSK_MODEL}.zip" "$VOSK_URL"
   (cd models && unzip -q "${VOSK_MODEL}.zip" && rm -f "${VOSK_MODEL}.zip")
 fi
 
-# Speaker hard-lock gate models: silero VAD + a speaker-embedding model.
-VAD_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
-EMB_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/nemo_en_titanet_small.onnx"
-[ -f models/silero_vad.onnx ] || { echo "Downloading silero VAD…"; curl -sL -o models/silero_vad.onnx "$VAD_URL"; }
-[ -f models/nemo_en_titanet_small.onnx ] || { echo "Downloading speaker-embedding model (~40 MB)…"; curl -sL -o models/nemo_en_titanet_small.onnx "$EMB_URL"; }
-
-echo "Sidecar ready at $(pwd) (default engine: livekit / james.onnx; speaker lock: on)"
+echo "Sidecar ready at $(pwd) (default engine: twostage / openWakeWord → Moonshine)"
 echo "Verify with: ./.venv/bin/python selftest.py"
