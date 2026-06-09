@@ -61,6 +61,7 @@ app.whenReady().then(async () => {
   configureMediaPermissions(session.defaultSession);
   await requestMicrophoneAccess({ systemPreferences });
   ipcMain.handle("app:ping", () => "pong");
+  ipcMain.handle("app:getVersion", () => app.getVersion());
   const dashboard = registerDashboardIpc(app.getPath("userData"));
   registerAssistantIpc(dashboard);
   const updater = registerUpdaterIpc({ appIsPackaged: app.isPackaged });

@@ -98,4 +98,5 @@ contextBridge.exposeInMainWorld("familyHub", {
     onStatus: makeSubscription("updater:status"),
   },
   ping: () => ipcRenderer.invoke("app:ping") as Promise<string>,
+  getVersion: () => ipcRenderer.invoke("app:getVersion") as Promise<string>,
 });

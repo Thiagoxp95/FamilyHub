@@ -212,6 +212,7 @@ interface FamilyHubBridge {
   dashboard: DashboardBridge;
   updater: UpdaterBridge;
   ping: () => Promise<string>;
+  getVersion: () => Promise<string>;
 }
 
 interface Window {
