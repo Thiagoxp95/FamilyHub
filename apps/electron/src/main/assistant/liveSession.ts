@@ -571,6 +571,11 @@ export class GeminiLiveSession {
         },
         systemInstruction: { parts: [{ text: this.systemInstruction }] },
         tools: conversationTools,
+        // Audio-only Live sessions have a ~15-min server-side duration cap, after
+        // which Gemini sends `goAway` and disconnects. A sliding-window context
+        // compression lifts that cap so a long conversation isn't torn down by the
+        // server. (Unrelated to the local idle timer, which handles silence.)
+        contextWindowCompression: { slidingWindow: {} },
       },
       model: this.model,
     });

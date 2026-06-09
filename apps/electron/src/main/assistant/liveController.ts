@@ -76,7 +76,11 @@ export interface LiveControllerOptions {
 }
 
 const defaultWakePhrases = ["hey james"];
-const defaultIdleTimeoutMs = 18_000;
+// Silence (no user speech, no assistant audio, no running tool) before the
+// session closes itself. Re-armed on every input/output/audio event, so this
+// only counts genuine quiet — long replies and think-time mid-conversation are
+// fine. 30s gives someone room to pause and gather a thought at the counter.
+const defaultIdleTimeoutMs = 30_000;
 
 // Diagnostic trace for the wake → gate → Gemini path. Prints to the main-process
 // console AND appends to ~/.familyhub/live-debug.log, so a packaged build launched
@@ -366,6 +370,10 @@ export class LiveController {
         });
         break;
       case "outputTranscript":
+        // The assistant talking is activity, not silence: a long reply must not
+        // trip the idle timeout and kill the session mid-sentence. Re-arm on every
+        // output chunk so the countdown only runs once James actually goes quiet.
+        this.armIdleTimer();
         this.outputTurnBuffer += event.text;
         this.sink.sendLive({
           type: "outputTranscript",
@@ -373,6 +381,7 @@ export class LiveController {
         });
         break;
       case "audio":
+        this.armIdleTimer();
         this.sink.sendLiveAudio({ data: event.data, mimeType: event.mimeType });
         break;
       case "toolCall":

@@ -211,6 +211,45 @@ describe("LiveController", () => {
     await vi.waitFor(() => expect(session?.closed).toBe(true));
   });
 
+  it("does not time out while the assistant is mid-reply (output/audio re-arm idle)", async () => {
+    const transcriber = new FakeTranscriber();
+    const sessions: FakeSession[] = [];
+    const sink = createSink();
+    const controller = new LiveController({
+      createTranscriber: () => transcriber,
+      createSession: () => {
+        const session = new FakeSession();
+        sessions.push(session);
+        return session;
+      },
+      sink,
+      idleTimeoutMs: 120,
+    });
+    await controller.start();
+
+    transcriber.emit("hey james tell me a long story");
+    await vi.waitFor(() => expect(sessions).toHaveLength(1));
+    const session = sessions[0];
+
+    // User finished; the model now speaks for far longer than the idle timeout,
+    // streaming transcript + audio the whole time. These MUST keep the session
+    // alive — the assistant talking is activity, not silence.
+    session?.handlers?.onEvent({ kind: "inputTranscript", text: "..." });
+    for (let i = 0; i < 6; i += 1) {
+      await new Promise((r) => setTimeout(r, 40)); // 240ms total ≫ 120ms timeout
+      session?.handlers?.onEvent({ kind: "outputTranscript", text: "and then" });
+      session?.handlers?.onEvent({
+        kind: "audio",
+        data: "AAAA",
+        mimeType: "audio/pcm;rate=24000",
+      });
+    }
+    expect(session?.closed).toBe(false);
+
+    // Once the assistant stops talking, the idle countdown runs out and closes.
+    await vi.waitFor(() => expect(session?.closed).toBe(true));
+  });
+
   it("resets dashboard focus when the session ends (collapses full-screen quadrants)", async () => {
     const transcriber = new FakeTranscriber();
     const sessions: FakeSession[] = [];
