@@ -160,42 +160,6 @@ button:disabled {
   gap: 9px;
 }
 
-.update-control {
-  align-items: center;
-  background: var(--hub-glass-2, #f3f6f5);
-  border: 1px solid var(--hub-stroke-soft, #cdd8d9);
-  border-radius: 8px;
-  color: var(--hub-text-2, #263538);
-  display: flex;
-  gap: 8px;
-  justify-content: space-between;
-  min-height: 40px;
-  padding: 6px 8px 6px 12px;
-}
-
-.update-control span {
-  font-size: 0.78rem;
-  font-weight: 800;
-  overflow-wrap: anywhere;
-}
-
-.update-control button {
-  min-height: 30px;
-  padding: 0 10px;
-}
-
-.update-control--ready {
-  background: rgba(48, 209, 88, 0.12);
-  border-color: rgba(48, 209, 88, 0.45);
-  color: var(--hub-text, #263538);
-}
-
-.update-control--error {
-  background: rgba(255, 69, 58, 0.13);
-  border-color: rgba(255, 69, 58, 0.48);
-  color: var(--hub-error-text, #8f2219);
-}
-
 /* ---------- 2x2 quadrant grid ---------- */
 .quad-grid {
   display: grid;
@@ -1970,12 +1934,13 @@ body.hub-modal-open {
 
 /* ---------- Seamless voice overlays (no solid bar) ---------- */
 
-/* Updater: tucked into the top-right corner, only present when actionable
-   (UpdateControl renders null otherwise). Fixed so it never shifts the grid. */
+/* Updater badge: a slim, low-chrome version pill in the top-right titlebar
+   strip, aligned to the macOS traffic lights. Always present (passive chrome);
+   the trailing glyph encodes update state. */
 .update-corner {
   position: fixed;
-  inset-block-start: 18px;
-  inset-inline-end: 18px;
+  inset-block-start: 6px;
+  inset-inline-end: 12px;
   z-index: 30;
   display: flex;
   justify-content: flex-end;
@@ -1984,6 +1949,66 @@ body.hub-modal-open {
 
 .update-corner > * {
   pointer-events: auto;
+}
+
+.version-badge {
+  -webkit-app-region: no-drag;
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--hub-text-2, #5b6b6d);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.72rem;
+  font-weight: 600;
+  gap: 4px;
+  height: 22px;
+  letter-spacing: 0.01em;
+  opacity: 0.72;
+  padding: 0 6px;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+
+.version-badge:hover:not(:disabled) {
+  background: var(--hub-glass-2, rgba(38, 53, 56, 0.06));
+  opacity: 1;
+}
+
+.version-badge:disabled {
+  cursor: default;
+}
+
+.version-badge__glyph {
+  font-size: 0.82rem;
+  line-height: 1;
+}
+
+.version-badge__percent {
+  font-variant-numeric: tabular-nums;
+}
+
+.version-badge--ready {
+  color: #1f9d4d;
+  opacity: 1;
+}
+
+.version-badge--ready:hover:not(:disabled) {
+  background: rgba(31, 157, 77, 0.12);
+}
+
+.version-badge__glyph--spin {
+  animation: version-badge-spin 0.9s linear infinite;
+  display: inline-block;
+}
+
+@keyframes version-badge-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* The live voice card has no side column (mic meter + update button removed),
