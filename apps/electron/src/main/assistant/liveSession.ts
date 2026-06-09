@@ -65,6 +65,12 @@ export const weatherToolName = "get_weather";
 // Drive the Mac via Codex CLI computer-use (the `cxdo` wrapper).
 export const computerToolName = "run_computer_task";
 
+export const updaterToolNames = {
+  checkForUpdates: "check_for_updates",
+  downloadUpdate: "download_update",
+  installUpdate: "install_update",
+} as const;
+
 export const dashboardToolNames = {
   showCalendar: "show_calendar_card",
   hideCalendar: "hide_calendar_card",
@@ -384,6 +390,24 @@ const conversationTools = [
           required: ["task"],
         },
       },
+      {
+        name: updaterToolNames.checkForUpdates,
+        description:
+          "Check whether a newer version of the FamilyHub app is available. Reports the current version and whether an update was found. Call this when the user asks about updates or the app version.",
+        parameters: { type: Type.OBJECT, properties: {} },
+      },
+      {
+        name: updaterToolNames.downloadUpdate,
+        description:
+          "Download an available update now. Updates normally download automatically in the background, so only use this if the user explicitly asks to download an available update right away.",
+        parameters: { type: Type.OBJECT, properties: {} },
+      },
+      {
+        name: updaterToolNames.installUpdate,
+        description:
+          "Install a downloaded update and relaunch the app. Only works once an update has finished downloading. This restarts the app, so confirm out loud with the user before calling it.",
+        parameters: { type: Type.OBJECT, properties: {} },
+      },
     ],
   },
 ];
@@ -415,6 +439,7 @@ export function buildSystemInstruction(now: Date = new Date()): string {
     "If the user does not say which calendar or reminders list, ask which one.",
     "For alarms use alarmsMinutesBefore (minutes before the event): [60] one hour before, [1440] one day before.",
     "After making a change, briefly confirm what you did. Keep every reply to one or two short sentences, suitable for being spoken aloud.",
+    "You can manage app updates: call check_for_updates to see whether a newer version is available, download_update to download an available update immediately, and install_update to install a downloaded update and relaunch the app. Always confirm out loud before calling install_update, since it restarts the app.",
     "When the user signals they are finished — goodbye, bye, that's all, never mind, thanks that's it, stop, or shut up — do not say anything in reply; immediately call the end_conversation function with no spoken farewell.",
   ].join(" ");
 }
