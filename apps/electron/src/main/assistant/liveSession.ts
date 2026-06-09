@@ -32,10 +32,10 @@ export interface GeminiLiveSessionOptions {
   systemInstruction?: string;
 }
 
-const defaultModel = "gemini-2.5-flash-native-audio-preview-12-2025";
+const defaultModel = "gemini-3.1-flash-live-preview";
 const defaultVoiceName = "Puck";
 const defaultSystemInstruction =
-  "You are James, a warm and concise family assistant. James is your assistant name, not a family member or calendar owner. Do not refer to yourself in the third person when summarizing family information. Answer in one or two short sentences, suitable for being spoken aloud. When the user signals they are finished — for example by saying goodbye, bye, see you later, that's all, never mind, thanks that's it, stop, or shut up — give a brief one-line farewell and then call the end_conversation function.";
+  'You are James, a warm and concise family assistant. James is your assistant name, not a family member or calendar owner. Do not refer to yourself in the third person when summarizing family information. You can read and manage the family Calendar, Reminders, and Notes. Whenever a dashboard quadrant is being discussed, call its show_*_card function so the UI zooms in; when the topic changes away, call the matching hide_*_card function. Use show_notes_card when family notes or post-its are discussed and show_weather_card when weather is discussed. Answer in one or two short sentences, suitable for being spoken aloud. When the user signals they are finished — for example by saying goodbye, bye, see you later, that\'s all, never mind, thanks that\'s it, stop, or shut up — do not say anything in reply. Immediately call the end_conversation function with no spoken farewell.';
 const inputMimeType = "audio/pcm;rate=16000";
 
 export const endConversationToolName = "end_conversation";
@@ -48,13 +48,37 @@ export const calendarToolNames = {
   deleteEvent: "delete_event",
   listReminders: "list_reminders",
   createReminder: "create_reminder",
+  updateReminder: "update_reminder",
   completeReminder: "complete_reminder",
   deleteReminder: "delete_reminder",
+} as const;
+
+export const noteToolNames = {
+  getNotes: "get_notes",
+  createNote: "create_note",
+  updateNote: "update_note",
+  deleteNote: "delete_note",
+} as const;
+
+export const weatherToolName = "get_weather";
+
+export const dashboardToolNames = {
+  showCalendar: "show_calendar_card",
+  hideCalendar: "hide_calendar_card",
+  showWeather: "show_weather_card",
+  hideWeather: "hide_weather_card",
+  showReminders: "show_reminders_card",
+  hideReminders: "hide_reminders_card",
+  showNotes: "show_notes_card",
+  hideNotes: "hide_notes_card",
 } as const;
 
 const isoHint = "ISO local time, e.g. 2026-06-09T15:00:00 (no timezone suffix)";
 
 const conversationTools = [
+  // Ground James' answers in live Google Search results. The Live API accepts
+  // the built-in googleSearch tool alongside our function declarations.
+  { googleSearch: {} },
   {
     functionDeclarations: [
       {
@@ -81,7 +105,8 @@ const conversationTools = [
           properties: {
             daysAhead: {
               type: Type.NUMBER,
-              description: "How many days ahead to include (default 14).",
+              description:
+                "Future calendar days after today to include, inclusive of the full target day. Example: on June 7, use 2 to include all events through June 9. Default includes the next 14 calendar days.",
             },
           },
         },
@@ -148,10 +173,31 @@ const conversationTools = [
         },
       },
       {
+        name: dashboardToolNames.showCalendar,
+        description:
+          "Expand the calendar quadrant to full screen while calendar events, schedule, appointments, plans, or availability are being discussed.",
+        parameters: { type: Type.OBJECT, properties: {} },
+      },
+      {
+        name: dashboardToolNames.hideCalendar,
+        description:
+          "Collapse the calendar quadrant back to its normal tile when the conversation stops being about events or schedule.",
+        parameters: { type: Type.OBJECT, properties: {} },
+      },
+      {
         name: calendarToolNames.listReminders,
         description:
-          "List open reminders (with their ids and lists), needed to complete or delete one.",
-        parameters: { type: Type.OBJECT, properties: {} },
+          "List open reminders with their ids, titles, due dates, and list names. Returns instantly. Call this to answer 'what's on my <list>' questions and to find a reminder's id before completing or deleting it. Optionally pass `list` to return only that list's items (and select its tab).",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            list: {
+              type: Type.STRING,
+              description:
+                "Optional list name to limit results to (e.g. 'To Buy', 'House Chores').",
+            },
+          },
+        },
       },
       {
         name: calendarToolNames.createReminder,
@@ -166,6 +212,21 @@ const conversationTools = [
             notes: { type: Type.STRING },
           },
           required: ["title"],
+        },
+      },
+      {
+        name: calendarToolNames.updateReminder,
+        description:
+          "Update an existing reminder (found via list_reminders). Only the provided fields change. Confirm with the user before overwriting.",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            id: { type: Type.STRING, description: "Reminder id from list_reminders." },
+            title: { type: Type.STRING },
+            due: { type: Type.STRING, description: `New due date/time, ${isoHint}.` },
+            notes: { type: Type.STRING },
+          },
+          required: ["id"],
         },
       },
       {
@@ -191,6 +252,119 @@ const conversationTools = [
           required: ["id"],
         },
       },
+      {
+        name: weatherToolName,
+        description:
+          "Get the current weather and the 14-day forecast for the home location (La Prairie). Returns current temperature, feels-like, humidity, wind, precipitation, UV, plus a daily forecast with high/low, precipitation amount and chance, humidity, wind, UV, and sunrise/sunset. Call this whenever the user asks about the weather, temperature, rain, snow, or the forecast.",
+        parameters: { type: Type.OBJECT, properties: {} },
+      },
+      {
+        name: dashboardToolNames.showWeather,
+        description:
+          "Expand the weather quadrant to full screen while weather is being discussed.",
+        parameters: { type: Type.OBJECT, properties: {} },
+      },
+      {
+        name: dashboardToolNames.hideWeather,
+        description:
+          "Collapse the weather quadrant back to its normal tile when the conversation stops being about weather.",
+        parameters: { type: Type.OBJECT, properties: {} },
+      },
+      {
+        name: dashboardToolNames.showReminders,
+        description:
+          "Expand the reminders quadrant to full screen while reminders, to-dos, tasks, or lists are being discussed. When the user is asking about a specific list, pass its name in `list` so that list's tab is selected.",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            list: {
+              type: Type.STRING,
+              description:
+                "Optional reminders list name to select (e.g. 'To Buy', 'Brasil', 'House Chores'). Use the exact list name from list_reminders when known.",
+            },
+          },
+        },
+      },
+      {
+        name: dashboardToolNames.hideReminders,
+        description:
+          "Collapse the reminders quadrant back to its normal tile when the conversation stops being about reminders or to-dos.",
+        parameters: { type: Type.OBJECT, properties: {} },
+      },
+      {
+        name: noteToolNames.getNotes,
+        description:
+          "Get the family post-it notes currently on the Notes board, each with its id, text, emoji, and color. Use this for questions about notes, and to find a note id before updating or deleting it.",
+        parameters: { type: Type.OBJECT, properties: {} },
+      },
+      {
+        name: noteToolNames.createNote,
+        description:
+          "Add a new post-it note to the family Notes board. Ask for the text if it is missing. Always choose a mood emoji. Optionally set a sticky color. Call this exactly once per note the user asks for.",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            text: { type: Type.STRING, description: "The note text." },
+            emoji: {
+              type: Type.STRING,
+              description:
+                "A single emoji matching the note's mood and intent, e.g. 🥛 for milk, 🗑️ for trash, ❤️ for an affectionate note, or 🛒 for shopping.",
+            },
+            color: {
+              type: Type.STRING,
+              enum: ["yellow", "pink", "mint", "blue", "orange"],
+              description: "Optional sticky color. Omit to auto-assign.",
+            },
+          },
+          required: ["text", "emoji"],
+        },
+      },
+      {
+        name: noteToolNames.updateNote,
+        description:
+          "Edit a post-it note by id: change its text, mood emoji, and/or color. When changing text, also pass an emoji that matches the new text. Use get_notes first if the note id is unknown. Confirm out loud before overwriting.",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            id: { type: Type.STRING, description: "Note id from get_notes." },
+            text: { type: Type.STRING, description: "New note text." },
+            emoji: {
+              type: Type.STRING,
+              description: "A single emoji matching the note's mood and intent.",
+            },
+            color: {
+              type: Type.STRING,
+              enum: ["yellow", "pink", "mint", "blue", "orange"],
+              description: "New sticky color.",
+            },
+          },
+          required: ["id"],
+        },
+      },
+      {
+        name: noteToolNames.deleteNote,
+        description:
+          "Delete a post-it note by id. Use get_notes first if the note id is unknown. Confirm out loud before deleting.",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            id: { type: Type.STRING, description: "Note id from get_notes." },
+          },
+          required: ["id"],
+        },
+      },
+      {
+        name: dashboardToolNames.showNotes,
+        description:
+          "Expand the Notes board to full screen while family notes or post-its are being discussed.",
+        parameters: { type: Type.OBJECT, properties: {} },
+      },
+      {
+        name: dashboardToolNames.hideNotes,
+        description:
+          "Collapse the Notes board back to its normal tile when the conversation stops being about notes.",
+        parameters: { type: Type.OBJECT, properties: {} },
+      },
     ],
   },
 ];
@@ -211,13 +385,17 @@ export function buildSystemInstruction(now: Date = new Date()): string {
   return [
     "You are James, a warm and concise family assistant. James is your assistant name, not a family member or calendar owner. Do not refer to yourself in the third person when summarizing family information.",
     `The current date and time is ${when} (timezone America/Toronto, in La Prairie, Québec).`,
-    "You can read and manage the family Calendar and Reminders using the provided tools. Resolve relative times like \"tomorrow at 3pm\", \"in an hour\", or \"next Monday\" into absolute ISO local datetimes (YYYY-MM-DDTHH:MM:SS) based on the current time above.",
-    "To change or remove an existing event or reminder, first call list_events or list_reminders to find its id, then act on that id.",
-    "ALWAYS confirm out loud before deleting or overwriting something — say what you are about to change and only do it after the user agrees. You may create new items directly.",
+    "You can read and manage the family Calendar, Reminders, and Notes, and read the weather, using the provided tools. Resolve relative times like \"tomorrow at 3pm\", \"in an hour\", or \"next Monday\" into absolute ISO local datetimes (YYYY-MM-DDTHH:MM:SS) based on the current time above.",
+    "For any weather, temperature, rain, snow, or forecast question, call get_weather to fetch live conditions and the 14-day forecast instead of guessing; temperatures are in Celsius.",
+    "Whenever a dashboard quadrant is being discussed, call its show_*_card function so the UI zooms in. Use show_calendar_card for schedule topics, show_weather_card for weather topics, show_reminders_card for reminders or lists, and show_notes_card for family notes or post-its. When discussing a specific reminders list (e.g. 'To Buy', 'Brasil', 'House Chores'), call show_reminders_card with its `list` name so that list's tab is selected. When the user changes away from that topic, call the matching hide_*_card function.",
+    "To change or remove an existing event or reminder, first call list_events or list_reminders to find its id, then act on that id. list_reminders returns instantly, so always read it (don't guess) when asked what's on a list, then say the items out loud.",
+    "To mark a reminder done, call list_reminders (optionally with the list name) to get the matching item's id, then call complete_reminder with that id and briefly confirm.",
+    "To change or remove an existing note, first call get_notes to find its id, then act on that id.",
+    "ALWAYS confirm out loud before deleting or overwriting something — say what you are about to change and only do it after the user agrees. You may create new items directly, including notes.",
     "If the user does not say which calendar or reminders list, ask which one.",
     "For alarms use alarmsMinutesBefore (minutes before the event): [60] one hour before, [1440] one day before.",
     "After making a change, briefly confirm what you did. Keep every reply to one or two short sentences, suitable for being spoken aloud.",
-    "When the user signals they are finished — goodbye, bye, that's all, never mind, thanks that's it, stop, or shut up — give a brief one-line farewell and then call the end_conversation function.",
+    "When the user signals they are finished — goodbye, bye, that's all, never mind, thanks that's it, stop, or shut up — do not say anything in reply; immediately call the end_conversation function with no spoken farewell.",
   ].join(" ");
 }
 
@@ -296,19 +474,47 @@ export class GeminiLiveSession {
   }
 
   async start(handlers: LiveSessionHandlers): Promise<void> {
+    // Resolve only once Gemini sends `setupComplete`. The websocket opening (what
+    // connect() awaits) is NOT enough: sending realtimeInput before setupComplete
+    // is rejected with "Precondition check failed" and the session is dropped. So
+    // "started" must mean "ready for input" — otherwise a buffered-audio flush on
+    // open races the handshake and the session closes in a split second.
+    let settled = false;
+    let markReady: () => void = () => {};
+    let markFailed: (error: Error) => void = () => {};
+    const ready = new Promise<void>((resolveReady, rejectReady) => {
+      markReady = resolveReady;
+      markFailed = rejectReady;
+    });
+
     this.session = await this.ai.live.connect({
       callbacks: {
         onopen: () => {},
         onmessage: (message: LiveServerMessage) => {
+          if (!settled && message.setupComplete) {
+            settled = true;
+            markReady();
+          }
+
           for (const event of interpretLiveMessage(message)) {
             handlers.onEvent(event);
           }
         },
         onerror: (error: unknown) => {
-          handlers.onError(readErrorMessage(error));
+          const message = readErrorMessage(error);
+          if (!settled) {
+            settled = true;
+            markFailed(new Error(message));
+          }
+          handlers.onError(message);
         },
         onclose: (event: { reason?: string } | undefined) => {
-          handlers.onClosed(event?.reason ?? "closed");
+          const reason = event?.reason ?? "closed";
+          if (!settled) {
+            settled = true;
+            markFailed(new Error(reason || "closed before setup"));
+          }
+          handlers.onClosed(reason);
         },
       },
       config: {
@@ -323,6 +529,8 @@ export class GeminiLiveSession {
       },
       model: this.model,
     });
+
+    await ready;
   }
 
   sendAudioFrame(base64Pcm16k: string): void {

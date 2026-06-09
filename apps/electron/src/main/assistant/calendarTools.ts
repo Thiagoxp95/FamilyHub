@@ -54,12 +54,68 @@ export interface CreateReminderInput {
   notes?: string | undefined;
 }
 
+export interface UpdateReminderInput {
+  id: string;
+  title?: string | undefined;
+  due?: string | undefined;
+  notes?: string | undefined;
+}
+
 function parseDate(iso: string): Date {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) {
     throw new Error(`Invalid date/time: "${iso}". Use ISO local time, e.g. 2026-06-09T15:00:00.`);
   }
   return date;
+}
+
+// ---------- idempotency helpers ----------
+// Gemini Live sometimes emits the same create_* tool call twice (separate turns),
+// which would otherwise create duplicate items. These pure predicates let the
+// create functions treat "make the same thing again" as a no-op.
+
+function normalizeText(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+// Same title, same start instant (±60s to absorb rounding), matching all-day
+// flag, and — only when the caller named a calendar — the same calendar.
+export function isSameEvent(existing: AgentEvent, input: CreateEventInput): boolean {
+  if (normalizeText(existing.title) !== normalizeText(input.title)) {
+    return false;
+  }
+
+  const a = new Date(existing.start).getTime();
+  const b = new Date(input.start).getTime();
+  if (Number.isNaN(a) || Number.isNaN(b) || Math.abs(a - b) > 60_000) {
+    return false;
+  }
+
+  if (existing.allDay !== (input.allDay === true)) {
+    return false;
+  }
+
+  if (input.calendar && input.calendar.trim()) {
+    return normalizeText(existing.calendar) === normalizeText(input.calendar);
+  }
+
+  return true;
+}
+
+// Same title and — only when the caller named a list — the same list.
+export function isSameReminder(
+  existing: AgentReminder,
+  input: CreateReminderInput,
+): boolean {
+  if (normalizeText(existing.title) !== normalizeText(input.title)) {
+    return false;
+  }
+
+  if (input.list && input.list.trim()) {
+    return normalizeText(existing.list) === normalizeText(input.list);
+  }
+
+  return true;
 }
 
 // Calendar display alarms: trigger interval is minutes relative to the event,
@@ -84,10 +140,12 @@ function calendarSelector(name?: string): string {
 
 // ---------- reads (with ids) ----------
 
-export async function listEvents(daysAhead = 14): Promise<AgentEvent[]> {
+export async function listEvents(daysAhead?: number): Promise<AgentEvent[]> {
   const start = new Date();
   start.setHours(0, 0, 0, 0);
-  const end = new Date(start.getTime() + Math.max(1, daysAhead) * 86_400_000);
+  const daysToInclude =
+    daysAhead === undefined ? 14 : Math.max(0, Math.floor(daysAhead)) + 1;
+  const end = new Date(start.getTime() + daysToInclude * 86_400_000);
   const script = `set US to (ASCII character 31)
 set RS to (ASCII character 30)
 set startDate to ${appleScriptDate(start)}
@@ -174,6 +232,26 @@ ${isoHandlers}`;
 
 export async function createEvent(input: CreateEventInput): Promise<AgentEvent> {
   const startDate = parseDate(input.start);
+
+  // Idempotency: if an identical event already exists, return it instead of
+  // creating a duplicate. Look only as far ahead as the event's own day.
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const daysAhead = Math.max(
+    0,
+    Math.ceil((startDate.getTime() - todayStart.getTime()) / 86_400_000),
+  );
+  try {
+    const duplicate = (await listEvents(daysAhead)).find((event) =>
+      isSameEvent(event, input),
+    );
+    if (duplicate) {
+      return duplicate;
+    }
+  } catch {
+    // Best effort — if the pre-check fails, fall through and create.
+  }
+
   const allDay = input.allDay === true;
   const endDate = input.end
     ? parseDate(input.end)
@@ -256,7 +334,18 @@ return "ok"`;
 
 // ---------- reminder writes ----------
 
-export async function createReminder(input: CreateReminderInput): Promise<{ list: string }> {
+export async function createReminder(
+  input: CreateReminderInput,
+  existing?: AgentReminder[],
+): Promise<{ list: string }> {
+  // Idempotency: skip if an identical open reminder already exists. Dedup against
+  // the caller's cached snapshot — a fresh listReminders() scan is far too slow
+  // on lists with many completed items and would stall the live turn.
+  const duplicate = existing?.find((reminder) => isSameReminder(reminder, input));
+  if (duplicate) {
+    return { list: duplicate.list };
+  }
+
   const props = [`name:${appleScriptString(input.title)}`];
   if (input.due) {
     props.push(`due date:${appleScriptDate(parseDate(input.due))}`);
@@ -278,27 +367,42 @@ return theName`;
   return { list: stdout.trim() || input.list || "Reminders" };
 }
 
-async function findReminderAndRun(id: string, action: string): Promise<void> {
+// Address the reminder directly by id instead of scanning every list with a
+// `whose id is` predicate. The scan walks all reminders (including hundreds of
+// completed ones) and takes tens of seconds on long lists, which overran the
+// live turn and left the assistant unable to confirm completions/deletions.
+async function runOnReminder(id: string, action: string): Promise<void> {
   const script = `tell application "Reminders"
-  set wasFound to false
-  repeat with lst in lists
-    try
-      set r to (first reminder of lst whose id is ${appleScriptString(id)})
-      ${action}
-      set wasFound to true
-      exit repeat
-    end try
-  end repeat
-  if not wasFound then error "Reminder not found"
+  set r to reminder id ${appleScriptString(id)}
+  ${action}
 end tell
 return "ok"`;
   await runWithLaunch(script, "Reminders");
 }
 
+export async function updateReminder(input: UpdateReminderInput): Promise<void> {
+  const sets: string[] = [];
+  if (input.title !== undefined) {
+    sets.push(`set name of r to ${appleScriptString(input.title)}`);
+  }
+  if (input.due !== undefined) {
+    sets.push(`set due date of r to ${appleScriptDate(parseDate(input.due))}`);
+  }
+  if (input.notes !== undefined) {
+    sets.push(`set body of r to ${appleScriptString(input.notes)}`);
+  }
+
+  if (sets.length === 0) {
+    return;
+  }
+
+  await runOnReminder(input.id, sets.join("\n  "));
+}
+
 export async function completeReminder(id: string): Promise<void> {
-  await findReminderAndRun(id, "set completed of r to true");
+  await runOnReminder(id, "set completed of r to true");
 }
 
 export async function deleteReminder(id: string): Promise<void> {
-  await findReminderAndRun(id, "delete r");
+  await runOnReminder(id, "delete r");
 }

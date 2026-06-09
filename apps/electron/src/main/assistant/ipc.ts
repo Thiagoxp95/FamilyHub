@@ -1,10 +1,12 @@
 import { ipcMain, type WebContents } from "electron";
-import { processLinear16AudioChunk } from "./audioPipeline";
 import * as calendarTools from "./calendarTools";
 import {
   GeminiLiveSession,
   buildSystemInstruction,
   calendarToolNames,
+  dashboardToolNames,
+  noteToolNames,
+  weatherToolName,
 } from "./liveSession";
 import {
   LiveController,
@@ -14,56 +16,30 @@ import {
 } from "./liveController";
 import {
   WakeWordSidecar,
-  resolveGateScript,
   resolveSidecarPython,
   resolveSidecarScript,
-  resolveSpeakerEmbedScript,
   type LocalTranscriber,
 } from "./localTranscriber";
-import { SpeakerGate } from "./speakerGate";
-import { FileSpeakerProfileStore } from "./profileStore";
-import { EnrollmentStore } from "./enrollmentStore";
-import { AssistantService, PlaceholderGeminiLive } from "./service";
-import { VoiceprintStore } from "./voiceprintStore";
+import { AssistantService } from "./service";
 import type { AssistantSnapshot } from "./types";
+import type { AgentReminder } from "./calendarTools";
+import type { DashboardController, DashboardPanel } from "../dashboard/ipc";
+import type { ReminderList } from "../dashboard/eventkit";
 import {
-  GeminiLiveTextAdapter,
-  GoogleSpeechDiarizationAdapter,
-} from "./vendorAdapters";
+  isNoteColor,
+  type NoteInput,
+  type NotePatch,
+} from "../dashboard/notesTypes";
 
 const assistantStateChannel = "assistant:state";
 const liveStateChannel = "assistant:live";
 const liveAudioChannel = "assistant:liveAudio";
 
-export interface DashboardRefresh {
-  refreshCalendar: () => Promise<void>;
-  refreshReminders: () => Promise<void>;
-}
-
-export function registerAssistantIpc(
-  userDataDirectory: string,
-  dashboard?: DashboardRefresh,
-): void {
+export function registerAssistantIpc(dashboard?: DashboardController): void {
   const geminiApiKey =
     process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? process.env.GOOGLE_API;
-  const gemini = geminiApiKey
-    ? new GeminiLiveTextAdapter({ apiKey: geminiApiKey })
-    : new PlaceholderGeminiLive();
-  const speech = readGoogleSpeechConfigured()
-    ? new GoogleSpeechDiarizationAdapter()
-    : null;
   const sidecarPython = resolveSidecarPython();
-  const embedScript = sidecarPython ? resolveSpeakerEmbedScript() : null;
-  const voiceprintStore =
-    sidecarPython && embedScript
-      ? new VoiceprintStore(userDataDirectory, sidecarPython, embedScript)
-      : new VoiceprintStore(userDataDirectory, sidecarPython ?? "", embedScript ?? "");
-  const service = new AssistantService({
-    gemini,
-    profileStore: new FileSpeakerProfileStore(userDataDirectory),
-    enrollmentStore: new EnrollmentStore(userDataDirectory),
-    voiceprintStore,
-  });
+  const service = new AssistantService();
 
   // The single renderer we stream live state to. Set when the renderer starts
   // listening; the controller pushes mode/transcript/audio events at it.
@@ -92,8 +68,8 @@ export function registerAssistantIpc(
     },
   };
 
-  // Dispatch a Gemini tool call to the Calendar/Reminders layer, refreshing the
-  // affected dashboard card after a write so the change shows immediately.
+  // Dispatch a Gemini tool call to the Calendar/Reminders/Notes layer, refreshing
+  // the affected dashboard card after a write so the change shows immediately.
   const runTool: ToolRunner = async (name, args) => {
     const str = (v: unknown): string => (typeof v === "string" ? v : "");
     const optStr = (v: unknown): string | undefined =>
@@ -103,6 +79,7 @@ export function registerAssistantIpc(
 
     switch (name) {
       case calendarToolNames.listEvents:
+        dashboard?.focusPanel("calendar");
         return {
           ok: true,
           events: await calendarTools.listEvents(
@@ -110,6 +87,7 @@ export function registerAssistantIpc(
           ),
         };
       case calendarToolNames.createEvent: {
+        dashboard?.focusPanel("calendar");
         const event = await calendarTools.createEvent({
           title: str(args.title),
           start: str(args.start),
@@ -122,6 +100,7 @@ export function registerAssistantIpc(
         return { ok: true, event };
       }
       case calendarToolNames.updateEvent: {
+        dashboard?.focusPanel("calendar");
         await calendarTools.updateEvent({
           id: str(args.id),
           title: optStr(args.title),
@@ -134,28 +113,152 @@ export function registerAssistantIpc(
         return { ok: true };
       }
       case calendarToolNames.deleteEvent:
+        dashboard?.focusPanel("calendar");
         await calendarTools.deleteEvent(str(args.id));
         await dashboard?.refreshCalendar();
         return { ok: true };
-      case calendarToolNames.listReminders:
-        return { ok: true, reminders: await calendarTools.listReminders() };
+      case calendarToolNames.listReminders: {
+        dashboard?.focusPanel("reminders");
+        if (!dashboard) {
+          return missingDashboard();
+        }
+
+        const wanted = optStr(args.list);
+        if (wanted) {
+          dashboard.focusReminderList(wanted);
+        }
+
+        // Served from the in-memory cache so it returns instantly; a fresh
+        // AppleScript scan can take tens of seconds on lists with many
+        // completed items and would blow past the live turn timeout.
+        const cached = await dashboard.getReminders();
+        if (cached.status !== "ok") {
+          return {
+            ok: false,
+            error:
+              cached.status === "denied"
+                ? "Reminders access is not granted."
+                : "Reminders unavailable.",
+          };
+        }
+
+        return {
+          ok: true,
+          reminders: flattenReminders(cached.lists, wanted),
+        };
+      }
       case calendarToolNames.createReminder: {
-        const result = await calendarTools.createReminder({
-          title: str(args.title),
-          due: optStr(args.due),
-          list: optStr(args.list),
-          notes: optStr(args.notes),
-        });
-        await dashboard?.refreshReminders();
+        dashboard?.focusPanel("reminders");
+        const cached = await dashboard?.getReminders();
+        const existing =
+          cached?.status === "ok" ? flattenReminders(cached.lists) : undefined;
+        const result = await calendarTools.createReminder(
+          {
+            title: str(args.title),
+            due: optStr(args.due),
+            list: optStr(args.list),
+            notes: optStr(args.notes),
+          },
+          existing,
+        );
+        dashboard?.focusReminderList(result.list);
+        // Refresh in the background so the tool returns immediately.
+        void dashboard?.refreshReminders();
         return { ok: true, list: result.list };
       }
+      case calendarToolNames.updateReminder:
+        dashboard?.focusPanel("reminders");
+        await calendarTools.updateReminder({
+          id: str(args.id),
+          title: optStr(args.title),
+          due: optStr(args.due),
+          notes: optStr(args.notes),
+        });
+        void dashboard?.refreshReminders();
+        return { ok: true };
       case calendarToolNames.completeReminder:
+        dashboard?.focusPanel("reminders");
         await calendarTools.completeReminder(str(args.id));
-        await dashboard?.refreshReminders();
+        void dashboard?.refreshReminders();
         return { ok: true };
       case calendarToolNames.deleteReminder:
+        dashboard?.focusPanel("reminders");
         await calendarTools.deleteReminder(str(args.id));
-        await dashboard?.refreshReminders();
+        void dashboard?.refreshReminders();
+        return { ok: true };
+      case noteToolNames.getNotes:
+        dashboard?.focusPanel("notes");
+        return dashboard
+          ? { ok: true, notes: await dashboard.getNotes() }
+          : missingDashboard();
+      case noteToolNames.createNote: {
+        dashboard?.focusPanel("notes");
+        if (!dashboard) {
+          return missingDashboard();
+        }
+
+        const note = await dashboard.createNote(readNoteInput(args));
+        return { ok: true, note };
+      }
+      case noteToolNames.updateNote: {
+        dashboard?.focusPanel("notes");
+        if (!dashboard) {
+          return missingDashboard();
+        }
+
+        const note = await dashboard.updateNote(
+          requireString(args.id, "Note id"),
+          readNotePatch(args),
+        );
+        return note ? { ok: true, note } : { ok: false, error: "Note not found." };
+      }
+      case noteToolNames.deleteNote:
+        dashboard?.focusPanel("notes");
+        return dashboard
+          ? {
+              ok: true,
+              ...(await dashboard.deleteNote(requireString(args.id, "Note id"))),
+            }
+          : missingDashboard();
+      case dashboardToolNames.showCalendar:
+        focusDashboard(dashboard, "calendar");
+        return { ok: true };
+      case dashboardToolNames.hideCalendar:
+        focusDashboard(dashboard, null);
+        return { ok: true };
+      case weatherToolName: {
+        dashboard?.focusPanel("weather");
+        if (!dashboard) {
+          return missingDashboard();
+        }
+
+        const result = await dashboard.getWeather();
+        return result.ok
+          ? { ok: true, weather: result.weather }
+          : { ok: false, error: result.error };
+      }
+      case dashboardToolNames.showWeather:
+        focusDashboard(dashboard, "weather");
+        return { ok: true };
+      case dashboardToolNames.hideWeather:
+        focusDashboard(dashboard, null);
+        return { ok: true };
+      case dashboardToolNames.showReminders: {
+        focusDashboard(dashboard, "reminders");
+        const list = optStr(args.list);
+        if (list) {
+          dashboard?.focusReminderList(list);
+        }
+        return { ok: true };
+      }
+      case dashboardToolNames.hideReminders:
+        focusDashboard(dashboard, null);
+        return { ok: true };
+      case dashboardToolNames.showNotes:
+        focusDashboard(dashboard, "notes");
+        return { ok: true };
+      case dashboardToolNames.hideNotes:
+        focusDashboard(dashboard, null);
         return { ok: true };
       default:
         return { ok: false, error: `Unknown tool: ${name}` };
@@ -163,7 +266,9 @@ export function registerAssistantIpc(
   };
 
   const sidecarScript = resolveSidecarScript();
-  const gateScript = resolveGateScript();
+  // Open to anyone: wake word → connect straight to Gemini, which streams the mic
+  // continuously and uses its own (server-side) VAD for turn-taking. No speaker
+  // gate / voiceprint lock — the fastest, most reliable path.
   const controller =
     geminiApiKey && sidecarPython && sidecarScript
       ? new LiveController({
@@ -175,63 +280,13 @@ export function registerAssistantIpc(
               systemInstruction: buildSystemInstruction(),
             }),
           runTool,
-          // Speaker hard-lock: only the invoker's voice reaches Gemini. Enabled
-          // when the gate sidecar resolves; otherwise the mic streams as-is.
-          ...(gateScript
-            ? { createGate: () => new SpeakerGate(sidecarPython, gateScript) }
-            : {}),
-          getVoiceprints: async () => {
-            const speakers = await service.listSpeakers();
-            const allowed = speakers.filter((s) => s.allowed).map((s) => s.id);
-            return voiceprintStore.loadAll(allowed);
-          },
+          resetDashboardFocus: () => dashboard?.focusPanel(null),
           sink,
         })
       : null;
 
   // ----- IPC handlers -----
   ipcMain.handle("assistant:getSnapshot", async () => service.getSnapshot());
-
-  ipcMain.handle("assistant:enrollSpeaker", async (event, name: unknown) => {
-    const speaker = await service.enrollSpeaker(requireString(name, "Speaker name"));
-    await emitSnapshot(event.sender, service);
-    return speaker;
-  });
-
-  ipcMain.handle(
-    "assistant:setSpeakerAllowed",
-    async (event, speakerId: unknown, allowed: unknown) => {
-      const speaker = await service.setSpeakerAllowed(
-        requireString(speakerId, "Speaker id"),
-        requireBoolean(allowed, "Allowed"),
-      );
-      await emitSnapshot(event.sender, service);
-      return speaker;
-    },
-  );
-
-  ipcMain.handle("assistant:deleteSpeaker", async (event, speakerId: unknown) => {
-    const deleted = await service.deleteSpeaker(requireString(speakerId, "Speaker id"));
-    await emitSnapshot(event.sender, service);
-    return deleted;
-  });
-
-  ipcMain.handle(
-    "assistant:saveEnrollmentClip",
-    async (event, speakerId: unknown, audioBase64: unknown) => {
-      const result = await service.saveEnrollmentClip(
-        requireString(speakerId, "Speaker id"),
-        requireString(audioBase64, "Audio"),
-      );
-      await emitSnapshot(event.sender, service);
-      return result;
-    },
-  );
-
-  ipcMain.handle("assistant:finalizeEnrollment", async (event, speakerId: unknown) => {
-    await service.finalizeEnrollment(requireString(speakerId, "Speaker id"));
-    await emitSnapshot(event.sender, service);
-  });
 
   ipcMain.handle("assistant:startListening", async (event) => {
     liveSender = event.sender;
@@ -256,30 +311,6 @@ export function registerAssistantIpc(
     return snapshot;
   });
 
-  ipcMain.handle(
-    "assistant:lockSessionSpeaker",
-    async (event, speakerId: unknown, speakerLabel: unknown) => {
-      const snapshot = await service.lockSessionSpeaker(
-        requireString(speakerId, "Speaker id"),
-        requireString(speakerLabel, "Speaker label"),
-      );
-      event.sender.send(assistantStateChannel, snapshot);
-      return snapshot;
-    },
-  );
-
-  ipcMain.handle(
-    "assistant:submitTranscript",
-    async (event, transcript: unknown, speakerLabel: unknown) => {
-      const result = await service.submitTranscriptTurn({
-        speakerLabel: requireString(speakerLabel, "Speaker label"),
-        transcript: requireString(transcript, "Transcript"),
-      });
-      await emitSnapshot(event.sender, service);
-      return result;
-    },
-  );
-
   // Continuous microphone stream (base64 LINEAR16 @16 kHz). The controller feeds
   // every frame to the local listener and decides what to buffer/forward.
   ipcMain.on("assistant:micFrame", (event, frame: unknown) => {
@@ -293,25 +324,6 @@ export function registerAssistantIpc(
     await controller?.endLive();
     return true;
   });
-
-  // Retained for the diagnostics panel / manual chunk submission.
-  ipcMain.handle(
-    "assistant:submitAudioChunk",
-    async (event, audio: unknown, sampleRateHertz: unknown) => {
-      if (!speech) {
-        throw new Error("Google Speech is not configured.");
-      }
-
-      const result = await processLinear16AudioChunk({
-        audio: requireUint8Array(audio, "Audio"),
-        sampleRateHertz: requirePositiveNumber(sampleRateHertz, "Sample rate hertz"),
-        service,
-        speech,
-      });
-      await emitSnapshot(event.sender, service);
-      return result;
-    },
-  );
 }
 
 async function emitSnapshot(
@@ -334,41 +346,82 @@ function requireString(value: unknown, label: string): string {
   return value.trim();
 }
 
-function requireBoolean(value: unknown, label: string): boolean {
-  if (typeof value !== "boolean") {
-    throw new Error(`${label} must be a boolean.`);
+function readNoteInput(args: Record<string, unknown>): NoteInput {
+  const input: NoteInput = {
+    text: requireString(args.text, "Note text"),
+  };
+
+  if (typeof args.emoji === "string" && args.emoji.trim()) {
+    input.emoji = args.emoji.trim();
   }
 
-  return value;
+  if (isNoteColor(args.color)) {
+    input.color = args.color;
+  }
+
+  return input;
 }
 
-function requirePositiveNumber(value: unknown, label: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    throw new Error(`${label} must be a positive number.`);
+function readNotePatch(args: Record<string, unknown>): NotePatch {
+  const patch: NotePatch = {};
+
+  if (typeof args.text === "string") {
+    patch.text = args.text;
   }
 
-  return value;
+  if (typeof args.emoji === "string" && args.emoji.trim()) {
+    patch.emoji = args.emoji.trim();
+  }
+
+  if (isNoteColor(args.color)) {
+    patch.color = args.color;
+  }
+
+  return patch;
 }
 
-function requireUint8Array(value: unknown, label: string): Uint8Array {
-  if (value instanceof Uint8Array) {
-    return value;
-  }
-
-  if (value instanceof ArrayBuffer) {
-    return new Uint8Array(value);
-  }
-
-  if (ArrayBuffer.isView(value)) {
-    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  }
-
-  throw new Error(`${label} must be bytes.`);
+function focusDashboard(
+  dashboard: DashboardController | undefined,
+  panel: DashboardPanel,
+): void {
+  dashboard?.focusPanel(panel);
 }
 
-function readGoogleSpeechConfigured(): boolean {
-  return Boolean(
-    process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim() ||
-      process.env.GOOGLE_CLOUD_PROJECT?.trim(),
-  );
+function missingDashboard(): Record<string, unknown> {
+  return { ok: false, error: "Dashboard is unavailable." };
+}
+
+// Flatten the cached reminder lists into the id-carrying shape the agent uses,
+// optionally narrowed to a single list (matched loosely by name).
+function flattenReminders(
+  lists: ReminderList[],
+  listFilter?: string,
+): AgentReminder[] {
+  const target = listFilter?.trim().toLowerCase();
+  const matches = (name: string): boolean => {
+    if (!target) {
+      return true;
+    }
+    const lower = name.trim().toLowerCase();
+    return lower === target || lower.includes(target) || target.includes(lower);
+  };
+
+  const reminders: AgentReminder[] = [];
+  for (const list of lists) {
+    if (!matches(list.name)) {
+      continue;
+    }
+    for (const item of list.items) {
+      const reminder: AgentReminder = {
+        id: item.id ?? "",
+        list: list.name,
+        title: item.title,
+      };
+      if (item.due) {
+        reminder.due = item.due;
+      }
+      reminders.push(reminder);
+    }
+  }
+  return reminders;
 }
