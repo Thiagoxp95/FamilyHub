@@ -14,6 +14,24 @@ interface CompletingReminder {
 // refresh confirms the mutation.
 const COMPLETING_LINGER_MS = 10_000;
 
+// Dated reminders are only shown when they're imminent (due within two weeks) or
+// already overdue. Far-future dated items (months out) are hidden to keep the
+// list focused on what's actionable now. Undated reminders always show.
+const TWO_WEEKS_MS = 14 * 24 * 60 * 60 * 1000;
+
+function isDueVisible(item: ReminderItem, now: number): boolean {
+  if (!item.due) {
+    return true;
+  }
+  const due = new Date(item.due).getTime();
+  if (Number.isNaN(due)) {
+    return true; // unparseable due date → treat as undated and show
+  }
+  // due - now is negative when overdue and ≤ TWO_WEEKS_MS when within the window;
+  // only strictly-far-future dates exceed it and get hidden.
+  return due - now <= TWO_WEEKS_MS;
+}
+
 export function RemindersPanel({
   focusList,
 }: {
@@ -155,7 +173,10 @@ export function RemindersPanel({
 
   const safeTab = Math.min(activeTab, result.lists.length - 1);
   const list = result.lists[safeTab];
-  const items = list?.items ?? [];
+  // Hide far-future dated reminders from the view (tab counts keep the true
+  // total). The filter is display-only — the assistant still sees every item.
+  const now = Date.now();
+  const items = (list?.items ?? []).filter((item) => isDueVisible(item, now));
 
   // Keep struck-through ghosts visible after the backend refresh drops them, so
   // the completion animation isn't cut short.

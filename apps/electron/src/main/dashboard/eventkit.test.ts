@@ -1,8 +1,24 @@
-import { describe, expect, it } from "vitest";
-import { parseCalendar, parseReminders } from "./eventkit";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { isAuthError, loadReminders, parseCalendar, parseReminders } from "./eventkit";
 
 const US = String.fromCharCode(31);
 const RS = String.fromCharCode(30);
+
+// osascript reports failures (e.g. an Automation denial) on stderr, while
+// execFile's rejection message is only "Command failed: <cmd>". Mock execFile so
+// it rejects with the real diagnostic on `.stderr`, mirroring the OS.
+const execFileMock = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", () => ({ execFile: execFileMock }));
+
+function rejectWithStderr(stderr: string): void {
+  execFileMock.mockImplementation(
+    (_cmd: string, _args: string[], _opts: unknown, cb: (e: Error) => void) => {
+      const error = new Error("Command failed: osascript -e <script>");
+      (error as Error & { stderr: string }).stderr = stderr;
+      cb(error);
+    },
+  );
+}
 
 describe("parseCalendar", () => {
   it("parses US/RS-delimited events and sorts by start", () => {
@@ -42,6 +58,26 @@ describe("parseCalendar", () => {
         title: "(no title)",
       },
     ]);
+  });
+});
+
+describe("loadReminders authorization", () => {
+  afterEach(() => {
+    execFileMock.mockReset();
+  });
+
+  it("classifies an Automation denial (-1743) as denied, not a raw error", async () => {
+    rejectWithStderr(
+      'execution error: Not authorized to send Apple events to Reminders. (-1743)',
+    );
+    expect(await loadReminders()).toEqual({ status: "denied" });
+  });
+
+  it("isAuthError matches the -1743 stderr text", () => {
+    expect(
+      isAuthError("Not authorized to send Apple events to Reminders. (-1743)"),
+    ).toBe(true);
+    expect(isAuthError("some unrelated failure")).toBe(false);
   });
 });
 

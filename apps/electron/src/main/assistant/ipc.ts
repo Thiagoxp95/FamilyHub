@@ -311,6 +311,15 @@ export function registerAssistantIpc(
         })
       : null;
 
+  // When the listener can't be built, explain which piece is missing rather than
+  // a generic "set up the sidecar" — on a fresh machine it's almost always the
+  // Gemini key in ~/.familyhub/.env, not the bundled runtime.
+  const listenerUnavailableReason = !geminiApiKey
+    ? "No Gemini API key — add GOOGLE_API (or GEMINI_API_KEY) to ~/.familyhub/.env, then relaunch."
+    : !sidecarPython || !sidecarScript
+      ? "Wake sidecar runtime missing from this build."
+      : "Local listener unavailable.";
+
   // ----- IPC handlers -----
   ipcMain.handle("assistant:getSnapshot", async () => service.getSnapshot());
 
@@ -320,9 +329,7 @@ export function registerAssistantIpc(
     if (controller) {
       await controller.start();
     } else {
-      service.noteInfo(
-        "Local listener unavailable — set up the Parakeet sidecar (see sidecar/README.md).",
-      );
+      service.noteInfo(listenerUnavailableReason);
     }
 
     const snapshot = await service.startListening();

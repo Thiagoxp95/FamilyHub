@@ -141,11 +141,23 @@ function delay(ms: number): Promise<void> {
 }
 
 async function runOsascript(script: string): Promise<string> {
-  const { stdout } = await execFileAsync("osascript", ["-e", script], {
-    maxBuffer: 16 * 1024 * 1024,
-    timeout: 90_000,
-  });
-  return stdout;
+  try {
+    const { stdout } = await execFileAsync("osascript", ["-e", script], {
+      maxBuffer: 16 * 1024 * 1024,
+      timeout: 90_000,
+    });
+    return stdout;
+  } catch (err) {
+    // execFile's error.message is just "Command failed: osascript -e <script>";
+    // the actual osascript diagnostic ("Not authorized… (-1743)", "(-600)") is on
+    // stderr. Re-throw with stderr as the message so isAuthError / isAppNotRunning
+    // can classify it instead of the UI showing the raw command.
+    const stderr = (err as { stderr?: unknown }).stderr;
+    if (typeof stderr === "string" && stderr.trim()) {
+      throw new Error(stderr.trim());
+    }
+    throw err;
+  }
 }
 
 // Launch the target app hidden (-g: don't foreground, -j: launch hidden) so the
