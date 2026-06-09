@@ -39,7 +39,10 @@ export function badgeContent(
         version: target,
         glyph: "↓",
         label: "Downloading update",
-        percent: status.percent,
+        // `exactOptionalPropertyTypes` rejects `percent: number | undefined`
+        // against the optional `percent?: number`, so default the rare
+        // no-progress-yet case to 0 rather than omitting the key.
+        percent: status.percent ?? 0,
       };
     case "downloaded":
       return { version: target, glyph: "↻", label: "Update ready — restart" };
