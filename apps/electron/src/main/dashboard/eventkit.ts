@@ -144,7 +144,7 @@ async function runOsascript(script: string): Promise<string> {
   try {
     const { stdout } = await execFileAsync("osascript", ["-e", script], {
       maxBuffer: 16 * 1024 * 1024,
-      timeout: 90_000,
+      timeout: 120_000,
     });
     return stdout;
   } catch (err) {
@@ -152,12 +152,24 @@ async function runOsascript(script: string): Promise<string> {
     // the actual osascript diagnostic ("Not authorized… (-1743)", "(-600)") is on
     // stderr. Re-throw with stderr as the message so isAuthError / isAppNotRunning
     // can classify it instead of the UI showing the raw command.
-    const stderr = (err as { stderr?: unknown }).stderr;
+    const e = err as { stderr?: unknown; killed?: boolean; signal?: string };
+    const stderr = e.stderr;
     if (typeof stderr === "string" && stderr.trim()) {
       throw new Error(stderr.trim());
     }
-    throw err;
+    // No stderr means execFile killed the process at the timeout (SIGTERM) — a
+    // slow Reminders/Calendar scan, not a real diagnostic. Never let the raw
+    // "Command failed: osascript -e <script>" reach the UI; classify it cleanly.
+    if (e.killed || e.signal === "SIGTERM") {
+      throw new Error("timed out");
+    }
+    throw new Error("unavailable");
   }
+}
+
+// A timeout/empty-stderr failure → show a calm message, not the raw command.
+export function isTimeoutError(message: string): boolean {
+  return /timed out/i.test(message);
 }
 
 // Launch the target app hidden (-g: don't foreground, -j: launch hidden) so the
@@ -196,9 +208,15 @@ export async function loadCalendar(days = 14): Promise<CalendarResult> {
     return { status: "ok", events: parseCalendar(stdout) };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return isAuthError(message)
-      ? { status: "denied" }
-      : { status: "error", error: message };
+    if (isAuthError(message)) {
+      return { status: "denied" };
+    }
+    return {
+      status: "error",
+      error: isTimeoutError(message)
+        ? "Calendar is taking a while — it'll refresh shortly."
+        : "Calendar is unavailable right now.",
+    };
   }
 }
 
@@ -208,9 +226,15 @@ export async function loadReminders(): Promise<RemindersResult> {
     return { status: "ok", lists: parseReminders(stdout) };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return isAuthError(message)
-      ? { status: "denied" }
-      : { status: "error", error: message };
+    if (isAuthError(message)) {
+      return { status: "denied" };
+    }
+    return {
+      status: "error",
+      error: isTimeoutError(message)
+        ? "Reminders is taking a while — it'll refresh shortly."
+        : "Reminders is unavailable right now.",
+    };
   }
 }
 

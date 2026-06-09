@@ -20,6 +20,19 @@ function rejectWithStderr(stderr: string): void {
   );
 }
 
+// execFile kills osascript at the timeout with SIGTERM and no stderr — the
+// failure mode that used to leak the raw "Command failed: osascript -e …" script
+// straight to the kitchen panel.
+function rejectAsTimeout(): void {
+  execFileMock.mockImplementation(
+    (_cmd: string, _args: string[], _opts: unknown, cb: (e: Error) => void) => {
+      const error = new Error("Command failed: osascript -e <script>");
+      Object.assign(error, { killed: true, signal: "SIGTERM", stderr: "" });
+      cb(error);
+    },
+  );
+}
+
 describe("parseCalendar", () => {
   it("parses US/RS-delimited events and sorts by start", () => {
     const raw =
@@ -78,6 +91,16 @@ describe("loadReminders authorization", () => {
       isAuthError("Not authorized to send Apple events to Reminders. (-1743)"),
     ).toBe(true);
     expect(isAuthError("some unrelated failure")).toBe(false);
+  });
+
+  it("never surfaces the raw command when osascript times out", async () => {
+    rejectAsTimeout();
+    const result = await loadReminders();
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.error).not.toMatch(/osascript|Command failed/i);
+      expect(result.error).toMatch(/taking a while/i);
+    }
   });
 });
 
