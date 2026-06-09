@@ -1433,6 +1433,96 @@ button:disabled {
   font-weight: 700;
 }
 
+/* ---------- Optimistic reminder completion ---------- */
+/* When the assistant completes a reminder, strike it through and tick its box
+   immediately, then let it dim and linger before the refresh drops it. */
+.rem-item--completing {
+  animation: rem-complete-dim 760ms ease forwards;
+}
+
+.rem-item--completing .rem-check {
+  animation: rem-check-pop 320ms ease both;
+  background: #1f9d4d;
+  border-color: #1f9d4d;
+  position: relative;
+}
+
+.rem-item--completing .rem-check::after {
+  block-size: 55%;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  content: "";
+  inline-size: 32%;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  position: absolute;
+  transform: translate(-50%, -62%) rotate(45deg);
+}
+
+.rem-item--completing .rem-title {
+  color: var(--hub-text-3, #7a8a8c);
+  position: relative;
+}
+
+.rem-item--completing .rem-title::after {
+  animation: rem-strike 360ms ease 80ms forwards;
+  background: currentColor;
+  block-size: 2px;
+  content: "";
+  inline-size: 100%;
+  inset-block-start: 50%;
+  inset-inline-start: 0;
+  position: absolute;
+  transform: scaleX(0);
+  transform-origin: left center;
+}
+
+@keyframes rem-check-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.2);
+  }
+  60% {
+    transform: scale(1.15);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes rem-strike {
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes rem-complete-dim {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.5;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rem-item--completing,
+  .rem-item--completing .rem-check,
+  .rem-item--completing .rem-title::after {
+    animation: none;
+  }
+
+  .rem-item--completing {
+    opacity: 0.5;
+  }
+
+  .rem-item--completing .rem-title::after {
+    transform: scaleX(1);
+  }
+}
+
 body.hub-modal-open {
   overflow: hidden;
 }
@@ -1939,9 +2029,13 @@ body.hub-modal-open {
    the trailing glyph encodes update state. */
 .update-corner {
   position: fixed;
-  inset-block-start: 6px;
+  inset-block-start: 0;
   inset-inline-end: 12px;
   z-index: 30;
+  /* Match the macOS traffic-light band so the badge sits level with the
+     minimize/maximize circles instead of dropping onto the first card. */
+  block-size: 28px;
+  align-items: center;
   display: flex;
   justify-content: flex-end;
   pointer-events: none;
@@ -1956,17 +2050,18 @@ body.hub-modal-open {
   align-items: center;
   background: transparent;
   border: 0;
-  border-radius: 6px;
+  border-radius: 5px;
   color: var(--hub-text-2, #5b6b6d);
   cursor: pointer;
   display: inline-flex;
-  font-size: 0.72rem;
+  font-size: 0.6rem;
   font-weight: 600;
-  gap: 4px;
-  height: 22px;
+  gap: 3px;
+  height: 18px;
   letter-spacing: 0.01em;
-  opacity: 0.72;
-  padding: 0 6px;
+  line-height: 1;
+  opacity: 0.7;
+  padding: 0 5px;
   transition: opacity 120ms ease, background 120ms ease;
 }
 
@@ -1980,7 +2075,7 @@ body.hub-modal-open {
 }
 
 .version-badge__glyph {
-  font-size: 0.82rem;
+  font-size: 0.7rem;
   line-height: 1;
 }
 

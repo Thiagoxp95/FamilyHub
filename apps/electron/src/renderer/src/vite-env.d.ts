@@ -200,6 +200,9 @@ interface DashboardBridge {
   onFocus: (callback: (panel: DashboardPanel) => void) => () => void;
   getReminderList: () => Promise<string | null>;
   onReminderList: (callback: (list: string | null) => void) => () => void;
+  // Fires with a reminder id the moment the assistant starts completing it, so
+  // the UI can optimistically strike it through before the mutation confirms.
+  onReminderCompleting: (callback: (id: string) => void) => () => void;
   createNote: (input: NoteInput) => Promise<Note>;
   updateNote: (id: string, patch: NotePatch) => Promise<Note | null>;
   deleteNote: (id: string) => Promise<{ deleted: true; id: string }>;

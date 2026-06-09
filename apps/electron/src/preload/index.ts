@@ -79,6 +79,7 @@ contextBridge.exposeInMainWorld("familyHub", {
     getReminderList: () =>
       ipcRenderer.invoke("dashboard:getReminderList") as Promise<unknown>,
     onReminderList: makeSubscription("dashboard:reminderList"),
+    onReminderCompleting: makeSubscription("dashboard:reminderCompleting"),
     createNote: (input: unknown) =>
       ipcRenderer.invoke("dashboard:createNote", input) as Promise<unknown>,
     updateNote: (id: string, patch: unknown) =>

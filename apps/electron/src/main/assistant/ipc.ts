@@ -183,11 +183,16 @@ export function registerAssistantIpc(
         });
         void dashboard?.refreshReminders();
         return { ok: true };
-      case calendarToolNames.completeReminder:
+      case calendarToolNames.completeReminder: {
         dashboard?.focusPanel("reminders");
-        await calendarTools.completeReminder(str(args.id));
+        const completingId = str(args.id);
+        // Optimistically strike the item through in the UI before the slow
+        // AppleScript mutation (and even slower refresh) lands.
+        dashboard?.markReminderCompleting(completingId);
+        await calendarTools.completeReminder(completingId);
         void dashboard?.refreshReminders();
         return { ok: true };
+      }
       case calendarToolNames.deleteReminder:
         dashboard?.focusPanel("reminders");
         await calendarTools.deleteReminder(str(args.id));

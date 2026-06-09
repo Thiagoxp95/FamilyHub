@@ -20,6 +20,7 @@ const remindersChannel = "dashboard:reminders";
 const notesChannel = "dashboard:notes";
 const focusChannel = "dashboard:focus";
 const reminderListChannel = "dashboard:reminderList";
+const reminderCompletingChannel = "dashboard:reminderCompleting";
 const weatherRefreshMs = 15 * 60 * 1000;
 const eventkitRefreshMs = 5 * 60 * 1000;
 
@@ -39,6 +40,9 @@ export interface DashboardController {
   getNotes: () => Promise<Note[]>;
   getReminders: () => Promise<RemindersResult>;
   getWeather: () => Promise<WeatherResult>;
+  // Announce (before the slow AppleScript mutation runs) that a reminder is being
+  // completed, so the UI can optimistically strike it through and check it off.
+  markReminderCompleting: (id: string) => void;
   refreshCalendar: () => Promise<void>;
   refreshNotes: () => Promise<void>;
   refreshReminders: () => Promise<void>;
@@ -115,6 +119,12 @@ export function registerDashboardIpc(userDataDirectory: string): DashboardContro
   function focusReminderList(list: string | null): void {
     selectedReminderList = list && list.trim() ? list.trim() : null;
     broadcast(reminderListChannel, selectedReminderList);
+  }
+
+  function markReminderCompleting(id: string): void {
+    if (id && id.trim()) {
+      broadcast(reminderCompletingChannel, id.trim());
+    }
   }
 
   async function createNote(input: NoteInput): Promise<Note> {
@@ -199,6 +209,7 @@ export function registerDashboardIpc(userDataDirectory: string): DashboardContro
     getNotes: () => notesStore.getNotes(),
     getReminders,
     getWeather,
+    markReminderCompleting,
     refreshCalendar,
     refreshNotes,
     refreshReminders,
