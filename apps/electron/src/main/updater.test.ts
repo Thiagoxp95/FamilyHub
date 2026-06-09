@@ -253,6 +253,28 @@ describe("createUpdaterController", () => {
     expect(updater.downloadUpdate).not.toHaveBeenCalled();
   });
 
+  it("swallows a failed on-demand download and stays idle", async () => {
+    const updater = new FakeUpdater();
+    updater.downloadUpdate = vi.fn(async () => {
+      throw new Error("network failed");
+    });
+    const broadcaster = createBroadcaster();
+    const controller = createUpdaterController({
+      broadcaster,
+      isPackaged: true,
+      updater,
+    });
+
+    updater.emit("update-available", { version: "0.1.1" });
+    await controller.downloadNow();
+
+    // A failed manual download routes through publishCheckError. downloadNow is
+    // not user-initiated (that flag lives in checkNow), so it falls to the silent
+    // branch and must leave the kitchen display untouched rather than throwing.
+    expect(updater.downloadUpdate).toHaveBeenCalledTimes(1);
+    expect(controller.getStatus()).toMatchObject({ state: "idle" });
+  });
+
   it("keeps downloaded state through later manual checks", async () => {
     const updater = new FakeUpdater();
     const broadcaster = createBroadcaster();
