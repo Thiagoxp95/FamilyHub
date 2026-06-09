@@ -27,7 +27,7 @@ import { AssistantService } from "./service";
 import type { AssistantSnapshot } from "./types";
 import type { AgentReminder } from "./calendarTools";
 import type { DashboardController, DashboardPanel } from "../dashboard/ipc";
-import type { UpdaterController } from "../updater";
+import type { UpdaterController, UpdaterStatus } from "../updater";
 import type { ReminderList } from "../dashboard/eventkit";
 import {
   isNoteColor,
@@ -273,27 +273,14 @@ export function registerAssistantIpc(
           ? { ok: true, output: result.output ?? "Done." }
           : { ok: false, error: result.error ?? "Computer task failed." };
       }
-      case updaterToolNames.checkForUpdates: {
-        if (!updater) {
-          return { ok: false, error: "Updater unavailable." };
-        }
-        const result = await updater.checkNow();
-        return { ok: true, ...result };
-      }
-      case updaterToolNames.downloadUpdate: {
-        if (!updater) {
-          return { ok: false, error: "Updater unavailable." };
-        }
-        const result = await updater.downloadNow();
-        return { ok: true, ...result };
-      }
-      case updaterToolNames.installUpdate: {
-        if (!updater) {
-          return { ok: false, error: "Updater unavailable." };
-        }
-        const result = await updater.installNow();
-        return { ok: true, ...result };
-      }
+      case updaterToolNames.checkForUpdates:
+        return callUpdater(updater, (controller) => controller.checkNow());
+      case updaterToolNames.downloadUpdate:
+        return callUpdater(updater, (controller) => controller.downloadNow());
+      // installNow() only relaunches if a download is already complete; verbal
+      // confirmation before installing is enforced by the system instruction.
+      case updaterToolNames.installUpdate:
+        return callUpdater(updater, (controller) => controller.installNow());
       default:
         return { ok: false, error: `Unknown tool: ${name}` };
     }
@@ -370,6 +357,24 @@ async function emitSnapshot(
 
   const snapshot: AssistantSnapshot = await service.getSnapshot();
   webContents.send(assistantStateChannel, snapshot);
+}
+
+// Run an updater controller method for a voice tool call and normalize the
+// result into the assistant's { ok, ... } envelope. A surfaced "error" state
+// (e.g. a failed user-initiated check) becomes { ok: false } so the model never
+// sees ok:true next to an error message.
+async function callUpdater(
+  controller: UpdaterController | undefined,
+  run: (controller: UpdaterController) => Promise<UpdaterStatus>,
+): Promise<Record<string, unknown>> {
+  if (!controller) {
+    return { ok: false, error: "Updater unavailable." };
+  }
+
+  const result = await run(controller);
+  return result.state === "error"
+    ? { ok: false, error: result.error ?? "Update failed." }
+    : { ok: true, ...result };
 }
 
 function requireString(value: unknown, label: string): string {
