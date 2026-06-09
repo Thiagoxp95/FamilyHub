@@ -77,8 +77,55 @@ const browsers: Array<[RegExp, string]> = [
 const urlPattern =
   /\b((?:https?:\/\/)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s]*)?)/i;
 
+// Phrases that signal "take me to a website" even when no literal domain is
+// spoken ("go to the New York Times website"). "open" only counts as navigation
+// when paired with a website word or a named browser, so "open Calculator"
+// stays an app launch.
+const navCuePattern =
+  /\b(?:go to|goto|navigate to|visit|pull up|browse to|head to|take me to|open up)\b/i;
+const websiteWordPattern = /\b(website|webpage|web page|site|homepage)\b/i;
+
+// Leading cue words to strip when carving the site name out of the task.
+const leadCuePattern =
+  /\b(?:go to|goto|navigate to|visit|pull up|browse to|head to|take me to|open up|open|launch)\s+/gi;
+// Filler/browser/site words removed from the carved-out name so "go to the New
+// York Times website on Safari" collapses to "New York Times".
+const fillerPattern =
+  /\b(google chrome|chrome|safari|arc|firefox|microsoft edge|edge|brave browser|brave|browser|application|app|website|webpage|web page|site|homepage|the|a|an|on|in|please)\b/gi;
+
 function normalizeUrl(raw: string): string {
   return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+}
+
+function detectBrowser(task: string): string | undefined {
+  return browsers.find(([re]) => re.test(task))?.[1];
+}
+
+// Carve the spoken site name out of a navigation task, e.g.
+// "Go to Safari application and go to the New York Times website" → "New York
+// Times". Returns "" when nothing meaningful is left (e.g. "open Safari").
+function extractSiteName(task: string): string {
+  let rest = task;
+  let lastEnd = -1;
+  leadCuePattern.lastIndex = 0;
+  for (let m = leadCuePattern.exec(task); m; m = leadCuePattern.exec(task)) {
+    lastEnd = leadCuePattern.lastIndex;
+  }
+  if (lastEnd >= 0) {
+    rest = task.slice(lastEnd);
+  }
+  return rest
+    .replace(fillerPattern, " ")
+    .replace(/[.!?,]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// A URL that lands on a site by name without driving the browser: DuckDuckGo's
+// "\" bang redirects straight to the top result. Launching this via `open`
+// reaches news/media sites that Codex computer-use refuses to navigate.
+function luckyUrl(siteName: string): string {
+  return `https://duckduckgo.com/?q=${encodeURIComponent(`\\${siteName}`)}`;
 }
 
 // Decide how to carry out a natural-language computer task. Pure + deterministic
@@ -94,12 +141,26 @@ export function planComputerTask(task: string): ComputerTaskPlan {
     return { kind: "computer-use" };
   }
 
-  // Pure navigation: open a URL directly (dodges the computer-use blocklist).
+  const browser = detectBrowser(t);
+
+  // Pure navigation with a literal domain: open it directly (dodges the
+  // computer-use blocklist entirely).
   const urlMatch = t.match(urlPattern);
   if (urlMatch?.[1]) {
     const url = normalizeUrl(urlMatch[1]);
-    const app = browsers.find(([re]) => re.test(t))?.[1];
-    return app ? { kind: "open-url", url, app } : { kind: "open-url", url };
+    return browser ? { kind: "open-url", url, app: browser } : { kind: "open-url", url };
+  }
+
+  // Navigation to a site named in words ("go to the New York Times website").
+  // Resolve it to a launchable URL so it never touches computer-use.
+  const isNavigation =
+    navCuePattern.test(t) || (/\bopen\b/i.test(t) && (websiteWordPattern.test(t) || browser !== undefined));
+  if (isNavigation) {
+    const siteName = extractSiteName(t);
+    if (siteName) {
+      const url = luckyUrl(siteName);
+      return browser ? { kind: "open-url", url, app: browser } : { kind: "open-url", url };
+    }
   }
 
   // Pure app launch: "open <app>", "launch <app>", "open the <app> app".

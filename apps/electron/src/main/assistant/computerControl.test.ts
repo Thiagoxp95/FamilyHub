@@ -40,6 +40,32 @@ describe("planComputerTask", () => {
     );
   });
 
+  it("resolves a site named in words to a direct open (no computer-use)", () => {
+    const lucky = (name: string) =>
+      `https://duckduckgo.com/?q=${encodeURIComponent(`\\${name}`)}`;
+
+    // The exact phrasing that hit OpenAI's computer-use blocklist.
+    expect(
+      planComputerTask(
+        "Go to Safari application and go to the New York Times website",
+      ),
+    ).toEqual({
+      kind: "open-url",
+      url: lucky("New York Times"),
+      app: "Safari",
+    });
+
+    expect(planComputerTask("open the globo website")).toEqual({
+      kind: "open-url",
+      url: lucky("globo"),
+    });
+
+    expect(planComputerTask("pull up the New York Times")).toEqual({
+      kind: "open-url",
+      url: lucky("New York Times"),
+    });
+  });
+
   it("falls back to full computer-use when the task needs UI interaction", () => {
     for (const task of [
       "open Spotify and play my workout playlist",
