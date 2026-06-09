@@ -4,10 +4,12 @@ import {
   GeminiLiveSession,
   buildSystemInstruction,
   calendarToolNames,
+  computerToolName,
   dashboardToolNames,
   noteToolNames,
   weatherToolName,
 } from "./liveSession";
+import { runComputerTask } from "./computerControl";
 import {
   LiveController,
   type LiveControllerSink,
@@ -260,6 +262,12 @@ export function registerAssistantIpc(dashboard?: DashboardController): void {
       case dashboardToolNames.hideNotes:
         focusDashboard(dashboard, null);
         return { ok: true };
+      case computerToolName: {
+        const result = await runComputerTask(str(args.task));
+        return result.ok
+          ? { ok: true, output: result.output ?? "Done." }
+          : { ok: false, error: result.error ?? "Computer task failed." };
+      }
       default:
         return { ok: false, error: `Unknown tool: ${name}` };
     }

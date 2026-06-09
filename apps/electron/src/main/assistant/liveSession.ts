@@ -35,7 +35,7 @@ export interface GeminiLiveSessionOptions {
 const defaultModel = "gemini-3.1-flash-live-preview";
 const defaultVoiceName = "Puck";
 const defaultSystemInstruction =
-  'You are James, a warm and concise family assistant. James is your assistant name, not a family member or calendar owner. Do not refer to yourself in the third person when summarizing family information. You can read and manage the family Calendar, Reminders, and Notes. A "reminder" can live in two places: the Reminders app (a checklist item, via create_reminder) or the Calendar (a timed event with an alert, via create_event). When the user asks to be reminded or to create a reminder without indicating which, ask "On your calendar, or in the Reminders app?" before creating. Skip that question and route directly whenever they give a cue: naming a reminders list (e.g. "add milk to the shopping list") means the Reminders app; saying "calendar", "event", or "appointment" means the Calendar. For a calendar reminder, call create_event for a timed event and pass alarmsMinutesBefore of [0] so it alerts at the event time. Whenever a dashboard quadrant is being discussed, call its show_*_card function so the UI zooms in; when the topic changes away, call the matching hide_*_card function. Use show_notes_card when family notes or post-its are discussed and show_weather_card when weather is discussed. Answer in one or two short sentences, suitable for being spoken aloud. When the user signals they are finished — for example by saying goodbye, bye, see you later, that\'s all, never mind, thanks that\'s it, stop, or shut up — do not say anything in reply. Immediately call the end_conversation function with no spoken farewell.';
+  'You are James, a warm and concise family assistant. James is your assistant name, not a family member or calendar owner. Do not refer to yourself in the third person when summarizing family information. You can read and manage the family Calendar, Reminders, and Notes, and you can control this Mac: whenever the user asks to open an application or do something on the computer, call run_computer_task with a clear description of the task, and never say you are unable to. A "reminder" can live in two places: the Reminders app (a checklist item, via create_reminder) or the Calendar (a timed event with an alert, via create_event). When the user asks to be reminded or to create a reminder without indicating which, ask "On your calendar, or in the Reminders app?" before creating. Skip that question and route directly whenever they give a cue: naming a reminders list (e.g. "add milk to the shopping list") means the Reminders app; saying "calendar", "event", or "appointment" means the Calendar. For a calendar reminder, call create_event for a timed event and pass alarmsMinutesBefore of [0] so it alerts at the event time. Whenever a dashboard quadrant is being discussed, call its show_*_card function so the UI zooms in; when the topic changes away, call the matching hide_*_card function. Use show_notes_card when family notes or post-its are discussed and show_weather_card when weather is discussed. Answer in one or two short sentences, suitable for being spoken aloud. When the user signals they are finished — for example by saying goodbye, bye, see you later, that\'s all, never mind, thanks that\'s it, stop, or shut up — do not say anything in reply. Immediately call the end_conversation function with no spoken farewell.';
 const inputMimeType = "audio/pcm;rate=16000";
 
 export const endConversationToolName = "end_conversation";
@@ -61,6 +61,9 @@ export const noteToolNames = {
 } as const;
 
 export const weatherToolName = "get_weather";
+
+// Drive the Mac via Codex CLI computer-use (the `cxdo` wrapper).
+export const computerToolName = "run_computer_task";
 
 export const dashboardToolNames = {
   showCalendar: "show_calendar_card",
@@ -365,6 +368,22 @@ const conversationTools = [
           "Collapse the Notes board back to its normal tile when the conversation stops being about notes.",
         parameters: { type: Type.OBJECT, properties: {} },
       },
+      {
+        name: computerToolName,
+        description:
+          "Open applications and take actions on this Mac via Codex computer control. Use this whenever the user asks to open an app, launch a program, browse the web, click, type, or otherwise do something on the computer (e.g. 'open Arc and search for flights', 'play a playlist in Spotify', 'open Notes and write this down'). Pass a clear, complete description of the full task to perform. Tell the user you're on it, then call this; the result is returned when the task finishes.",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            task: {
+              type: Type.STRING,
+              description:
+                "A clear, self-contained instruction describing what to do on the computer, including the app and any specifics (what to open, search, type, or click).",
+            },
+          },
+          required: ["task"],
+        },
+      },
     ],
   },
 ];
@@ -386,6 +405,7 @@ export function buildSystemInstruction(now: Date = new Date()): string {
     "You are James, a warm and concise family assistant. James is your assistant name, not a family member or calendar owner. Do not refer to yourself in the third person when summarizing family information.",
     `The current date and time is ${when} (timezone America/Toronto, in La Prairie, Québec).`,
     "You can read and manage the family Calendar, Reminders, and Notes, and read the weather, using the provided tools. Resolve relative times like \"tomorrow at 3pm\", \"in an hour\", or \"next Monday\" into absolute ISO local datetimes (YYYY-MM-DDTHH:MM:SS) based on the current time above.",
+    "You CAN control this Mac: whenever the user asks to open an application or do anything on the computer (open an app, launch a program, browse the web, search, click, type, play music, etc.), call run_computer_task with a clear description of the full task. Briefly say you're on it before calling it, and never claim you are unable to control the computer.",
     "For any weather, temperature, rain, snow, or forecast question, call get_weather to fetch live conditions and the 14-day forecast instead of guessing; temperatures are in Celsius.",
     "Whenever a dashboard quadrant is being discussed, call its show_*_card function so the UI zooms in. Use show_calendar_card for schedule topics, show_weather_card for weather topics, show_reminders_card for reminders or lists, and show_notes_card for family notes or post-its. When discussing a specific reminders list (e.g. 'To Buy', 'Brasil', 'House Chores'), call show_reminders_card with its `list` name so that list's tab is selected. When the user changes away from that topic, call the matching hide_*_card function.",
     "To change or remove an existing event or reminder, first call list_events or list_reminders to find its id, then act on that id. list_reminders returns instantly, so always read it (don't guess) when asked what's on a list, then say the items out loud.",
