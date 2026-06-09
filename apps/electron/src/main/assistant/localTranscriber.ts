@@ -96,9 +96,14 @@ export function resolveSidecarPython(): string | null {
     return process.env.FAMILYHUB_SIDECAR_PYTHON;
   }
 
-  return firstExisting(
-    sidecarRoots().map((root) => resolve(root, ".venv/bin/python")),
-  );
+  // Prefer the self-contained runtime bundled into packaged builds
+  // (scripts/build-sidecar-runtime.sh) over a dev-only .venv, so an installed
+  // app never depends on a system Python that a fresh machine won't have.
+  const roots = sidecarRoots();
+  return firstExisting([
+    ...roots.map((root) => resolve(root, ".runtime/bin/python3")),
+    ...roots.map((root) => resolve(root, ".venv/bin/python")),
+  ]);
 }
 
 export function resolveSidecarScript(): string | null {

@@ -21,6 +21,11 @@ interchangeable engines (select via --engine or FAMILYHUB_WAKE_ENGINE):
 
 Knobs:
   FAMILYHUB_WAKE_ENGINE          — engine to use ("twostage" or "vosk")
+  FAMILYHUB_WAKE_STAGE2          — "1"/on (default) runs the Moonshine confirm;
+                                   "0"/"off"/"false"/"no" wakes on Stage 1 alone
+                                   (higher recall, more false positives). The
+                                   confirm model is not even loaded when off, so
+                                   this is a clean on/off with no leftover cost.
   FAMILYHUB_WAKE_THRESHOLD       — Stage-1 openWakeWord score threshold (recall)
   FAMILYHUB_WAKE_POST_TRIGGER_MS — milliseconds of audio to buffer after Stage-1
                                    fires before handing off to Stage-2 Moonshine
@@ -107,6 +112,14 @@ WAKE_TOKEN_ALIASES = {
     "james": ("james", "jaymes", "jaimes", "jamez", "jaymz", "hames", "jaymez"),
 }
 
+# Short filler words Moonshine occasionally FUSES onto the wake token when it
+# drops the inter-word space, e.g. "a james" -> "ajames", "hey james" ->
+# "heyjames" (observed as a real-wake VETO in ~/.familyhub/wake-debug.log).
+# Recovering exactly these <filler>+<alias> glues recovers genuine wakes
+# without the precision cost of substring matching — "names"/"jameson"/
+# "pyjames" still do not match because their prefix is not a known filler.
+WAKE_GLUE_PREFIXES = ("a", "the", "hey", "hi", "he", "uh", "oh", "i")
+
 
 def text_contains_wake_token(text, distinctive_tokens):
     """True iff any distinctive token (or a curated alias of it) appears as a
@@ -135,6 +148,10 @@ def text_contains_wake_token(text, distinctive_tokens):
         for alias in WAKE_TOKEN_ALIASES.get(token, (token,)):
             if alias in words:
                 return True
+            # Recover space-dropped glues ("ajames" = "a" + "james").
+            for prefix in WAKE_GLUE_PREFIXES:
+                if (prefix + alias) in words:
+                    return True
     return False
 
 
@@ -352,8 +369,13 @@ class TwoStageEngine:
             return False
         # Stage 1 is intentionally not fed during collection: its own cooldown
         # holds, so it won't re-fire on the same utterance (~3 s effective gap).
-        if self.stage1.feed(pcm_bytes):  # Stage-1 candidate → collect rest of word
-            self._collecting_samples = self.post_trigger_samples
+        if self.stage1.feed(pcm_bytes):  # Stage-1 candidate
+            if self.confirmer is None:
+                # Stage-2 disabled (FAMILYHUB_WAKE_STAGE2=0): wake on Stage 1
+                # alone, no post-trigger buffering or Moonshine decode.
+                dlog("wake: stage-1 FIRED, stage-2 disabled — waking")
+                return True
+            self._collecting_samples = self.post_trigger_samples  # collect rest of word
         return False
 
 
@@ -372,12 +394,18 @@ def build_engine(args, wake_words):
         os.path.join(HERE, "models", "sherpa-onnx-moonshine-tiny-en-int8"),
     )
     confirm_tokens = [t.lower() for t in args.confirm_phrase.split() if t]
-    engine = TwoStageEngine(
-        model, args.threshold, MoonshineConfirmer(moonshine_dir), confirm_tokens
+    stage2_on = os.environ.get("FAMILYHUB_WAKE_STAGE2", "1").strip().lower() not in (
+        "0",
+        "off",
+        "false",
+        "no",
     )
+    confirmer = MoonshineConfirmer(moonshine_dir) if stage2_on else None
+    engine = TwoStageEngine(model, args.threshold, confirmer, confirm_tokens)
     description = (
         f"twostage: emit='{args.wake_phrase}' confirm={confirm_tokens} "
-        f"s1={args.threshold} (openWakeWord→Moonshine)"
+        f"s1={args.threshold} "
+        + ("(openWakeWord→Moonshine)" if stage2_on else "(openWakeWord ONLY, stage-2 OFF)")
     )
     return engine, description
 
@@ -394,7 +422,10 @@ def main():
     parser.add_argument(
         "--threshold",
         type=float,
-        default=float(os.environ.get("FAMILYHUB_WAKE_THRESHOLD", "0.5")),
+        # 0.45 is the tuned recall-first default (was 0.5): accented/real-mic
+        # "Hey James" still fires, and Stage-2 Moonshine rejects the extra
+        # candidates. Matches the value the dev box sets via ~/.familyhub/.env.
+        default=float(os.environ.get("FAMILYHUB_WAKE_THRESHOLD", "0.45")),
         help="stage-1 openWakeWord candidate threshold; tuned low for two-stage recall.",
     )
     parser.add_argument(

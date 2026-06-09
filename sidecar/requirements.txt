@@ -5,7 +5,11 @@
 #     the post-trigger tail to confirm the distinctive word was actually spoken.
 #   vosk (fallback wake engine) — offline ASR constrained to a keyword grammar.
 # numpy is used by every engine and selftest.py.
-openwakeword
-sherpa-onnx
-vosk
-numpy
+# Pinned to the versions baked into the shipped sidecar runtime
+# (scripts/build-sidecar-runtime.sh) so packaged builds are reproducible.
+# onnxruntime is a transitive dep of openwakeword; pinned explicitly.
+openwakeword==0.6.0
+sherpa-onnx==1.13.2
+vosk==0.3.44
+numpy==2.4.6
+onnxruntime==1.26.0

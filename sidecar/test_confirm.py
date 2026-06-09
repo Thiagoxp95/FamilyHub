@@ -44,9 +44,15 @@ def test_text_match():
     # alias from gating.ts list
     assert text_contains_wake_token("hey jaymes", ["james"]) is True
     assert text_contains_wake_token("a hames", ["james"]) is True
+    # space-dropped glue: Moonshine sometimes fuses a leading filler onto the
+    # token ("a james" -> "ajames"). Observed real-wake veto in wake-debug.log.
+    assert text_contains_wake_token("ajames", ["james"]) is True
+    assert text_contains_wake_token("heyjames", ["james"]) is True
     # whole-word only — substrings of other words must not match
     assert text_contains_wake_token("hey jameson", ["james"]) is False
     assert text_contains_wake_token("what are their names", ["james"]) is False
+    # glue recovery must not over-match: a non-filler prefix is still rejected
+    assert text_contains_wake_token("pyjames", ["james"]) is False
     # near-misses the model would decode differently
     assert text_contains_wake_token("hey jason", ["james"]) is False
     assert text_contains_wake_token("hey games", ["james"]) is False

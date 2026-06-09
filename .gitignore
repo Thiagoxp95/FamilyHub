@@ -11,6 +11,9 @@ coverage
 .env.*.local
 .credentials
 sidecar/.venv/
+# Self-contained Python runtime bundled into packaged builds (built by
+# apps/electron/scripts/build-sidecar-runtime.sh; ~200 MB).
+sidecar/.runtime/
 # Ignore downloaded models, but keep the committed openWakeWord wake model.
 sidecar/models/*
 !sidecar/models/hey_james.onnx
