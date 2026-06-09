@@ -181,6 +181,20 @@ describe("updateReminder", () => {
     expect(script).not.toContain("set due date");
   });
 
+  it("sets multiple fields on separate AppleScript lines", async () => {
+    await updateReminder({ id: "rem-1", title: "Call dentist", notes: "office line" });
+
+    const calls = runWithLaunchMock.mock.calls as unknown as [string, string][];
+    const script: string = calls[0]?.[0] ?? "";
+    const lines = script.split("\n");
+    expect(lines.some((l) => l.includes('set name of r to "Call dentist"'))).toBe(true);
+    expect(lines.some((l) => l.includes('set body of r to "office line"'))).toBe(true);
+    // The two set-statements must be on distinct lines (not collapsed into one).
+    const nameLine = lines.findIndex((l) => l.includes('set name of r to "Call dentist"'));
+    const bodyLine = lines.findIndex((l) => l.includes('set body of r to "office line"'));
+    expect(nameLine).not.toBe(bodyLine);
+  });
+
   it("does not call runWithLaunch when no fields are provided (no-op)", async () => {
     await updateReminder({ id: "rem-1" });
 

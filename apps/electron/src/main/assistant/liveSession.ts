@@ -222,9 +222,9 @@ const conversationTools = [
           type: Type.OBJECT,
           properties: {
             id: { type: Type.STRING, description: "Reminder id from list_reminders." },
-            title: { type: Type.STRING },
+            title: { type: Type.STRING, description: "New reminder title. Omit to leave unchanged." },
             due: { type: Type.STRING, description: `New due date/time, ${isoHint}.` },
-            notes: { type: Type.STRING },
+            notes: { type: Type.STRING, description: "New notes/body. Omit to leave unchanged." },
           },
           required: ["id"],
         },
