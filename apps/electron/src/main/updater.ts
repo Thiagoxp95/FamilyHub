@@ -32,6 +32,7 @@ export interface UpdaterStatus {
 export interface UpdaterAdapter {
   autoDownload: boolean;
   checkForUpdates: () => Promise<unknown>;
+  downloadUpdate: () => Promise<unknown>;
   quitAndInstall: (isSilent?: boolean, isForceRunAfter?: boolean) => void;
   on: (event: string, listener: (...args: unknown[]) => void) => unknown;
 }
@@ -42,6 +43,7 @@ export interface UpdaterBroadcaster {
 
 export interface UpdaterController {
   checkNow: () => Promise<UpdaterStatus>;
+  downloadNow: () => Promise<UpdaterStatus>;
   getStatus: () => UpdaterStatus;
   installNow: () => Promise<UpdaterStatus>;
   start: () => Promise<void>;
@@ -194,6 +196,22 @@ export function createUpdaterController({
   return {
     async checkNow() {
       return checkNow(true);
+    },
+    async downloadNow() {
+      // electron-updater auto-downloads in the background, so this is only a
+      // manual nudge: download is meaningful exactly when an update is known to
+      // be available. quietly no-op otherwise (idle/not-available/downloaded).
+      if (!isPackaged || status.state !== "available") {
+        return status;
+      }
+
+      try {
+        await updater.downloadUpdate();
+      } catch (error) {
+        publishCheckError(error);
+      }
+
+      return status;
     },
     getStatus() {
       return status;

@@ -12,6 +12,9 @@ class FakeUpdater extends EventEmitter implements UpdaterAdapter {
   checkForUpdates = vi.fn(async () => {
     this.emit("checking-for-update");
   });
+  downloadUpdate = vi.fn(async () => {
+    this.emit("download-progress", { percent: 0 });
+  });
   quitAndInstall = vi.fn();
 }
 
@@ -204,6 +207,50 @@ describe("createUpdaterController", () => {
     await controller.installNow();
 
     expect(updater.quitAndInstall).not.toHaveBeenCalled();
+  });
+
+  it("downloads an available update on demand", async () => {
+    const updater = new FakeUpdater();
+    const broadcaster = createBroadcaster();
+    const controller = createUpdaterController({
+      broadcaster,
+      isPackaged: true,
+      updater,
+    });
+
+    updater.emit("update-available", { version: "0.1.1" });
+    await controller.downloadNow();
+
+    expect(updater.downloadUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not download when no update is available", async () => {
+    const updater = new FakeUpdater();
+    const broadcaster = createBroadcaster();
+    const controller = createUpdaterController({
+      broadcaster,
+      isPackaged: true,
+      updater,
+    });
+
+    await controller.downloadNow();
+
+    expect(updater.downloadUpdate).not.toHaveBeenCalled();
+  });
+
+  it("never downloads in development mode", async () => {
+    const updater = new FakeUpdater();
+    const broadcaster = createBroadcaster();
+    const controller = createUpdaterController({
+      broadcaster,
+      isPackaged: false,
+      updater,
+    });
+
+    updater.emit("update-available", { version: "0.1.1" });
+    await controller.downloadNow();
+
+    expect(updater.downloadUpdate).not.toHaveBeenCalled();
   });
 
   it("keeps downloaded state through later manual checks", async () => {
