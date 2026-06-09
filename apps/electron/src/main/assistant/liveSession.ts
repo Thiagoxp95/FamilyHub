@@ -35,7 +35,7 @@ export interface GeminiLiveSessionOptions {
 const defaultModel = "gemini-3.1-flash-live-preview";
 const defaultVoiceName = "Puck";
 const defaultSystemInstruction =
-  'You are James, a warm and concise family assistant. James is your assistant name, not a family member or calendar owner. Do not refer to yourself in the third person when summarizing family information. You can read and manage the family Calendar, Reminders, and Notes. Whenever a dashboard quadrant is being discussed, call its show_*_card function so the UI zooms in; when the topic changes away, call the matching hide_*_card function. Use show_notes_card when family notes or post-its are discussed and show_weather_card when weather is discussed. Answer in one or two short sentences, suitable for being spoken aloud. When the user signals they are finished — for example by saying goodbye, bye, see you later, that\'s all, never mind, thanks that\'s it, stop, or shut up — do not say anything in reply. Immediately call the end_conversation function with no spoken farewell.';
+  'You are James, a warm and concise family assistant. James is your assistant name, not a family member or calendar owner. Do not refer to yourself in the third person when summarizing family information. You can read and manage the family Calendar, Reminders, and Notes. A "reminder" can live in two places: the Reminders app (a checklist item, via create_reminder) or the Calendar (a timed event with an alert, via create_event). When the user asks to be reminded or to create a reminder without indicating which, ask "On your calendar, or in the Reminders app?" before creating. Skip that question and route directly whenever they give a cue: naming a reminders list (e.g. "add milk to the shopping list") means the Reminders app; saying "calendar", "event", or "appointment" means the Calendar. For a calendar reminder, call create_event for a timed event and pass alarmsMinutesBefore of [0] so it alerts at the event time. Whenever a dashboard quadrant is being discussed, call its show_*_card function so the UI zooms in; when the topic changes away, call the matching hide_*_card function. Use show_notes_card when family notes or post-its are discussed and show_weather_card when weather is discussed. Answer in one or two short sentences, suitable for being spoken aloud. When the user signals they are finished — for example by saying goodbye, bye, see you later, that\'s all, never mind, thanks that\'s it, stop, or shut up — do not say anything in reply. Immediately call the end_conversation function with no spoken farewell.';
 const inputMimeType = "audio/pcm;rate=16000";
 
 export const endConversationToolName = "end_conversation";
@@ -114,7 +114,7 @@ const conversationTools = [
       {
         name: calendarToolNames.createEvent,
         description:
-          "Create a new calendar event. Ask which calendar if the user did not say.",
+          'Create a new calendar event. Also use this for a "calendar reminder": a timed event with an alert at the time — pass alarmsMinutesBefore of [0]. Ask which calendar if the user did not say.',
         parameters: {
           type: Type.OBJECT,
           properties: {
@@ -202,7 +202,7 @@ const conversationTools = [
       {
         name: calendarToolNames.createReminder,
         description:
-          "Create a reminder. Ask which list if the user did not say.",
+          'Create a reminder in the Reminders app (a checklist item). If the user did not make the destination clear, first ask whether they want it on the calendar or in the Reminders app. Ask which list if the user did not say.',
         parameters: {
           type: Type.OBJECT,
           properties: {
