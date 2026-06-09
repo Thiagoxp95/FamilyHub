@@ -11,6 +11,18 @@ coverage
 .env.*.local
 .credentials
 sidecar/.venv/
-sidecar/models/
+# Ignore downloaded models, but keep the committed openWakeWord wake model.
+sidecar/models/*
+!sidecar/models/hey_james.onnx
 __pycache__/
 *.pyc
+
+# Wake-word training working area (large, off-device artifacts; ~20 GB).
+# Keep the reproducibility recipe (training/README.md), config, and runner.
+sidecar/training/.venv/
+sidecar/training/data/
+sidecar/training/my_custom_model/
+sidecar/training/smoke_model/
+sidecar/training/piper-sample-generator/
+sidecar/training/dl.py
+sidecar/training/smoke.yml
