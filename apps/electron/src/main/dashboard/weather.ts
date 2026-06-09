@@ -19,15 +19,35 @@ export interface WeatherCondition {
   label: string;
 }
 
+// One day in the extended forecast. Temperatures are Celsius, wind mph, precip
+// mm, chance/humidity percent. Nullable fields are omitted by Open-Meteo for
+// some locations/days.
+export interface WeatherDay {
+  condition: WeatherCondition;
+  date: string;
+  highC: number;
+  humidity: number | null;
+  lowC: number;
+  precipitationChance: number | null;
+  precipitationMm: number | null;
+  sunrise: string | null;
+  sunset: string | null;
+  uvIndex: number | null;
+  windMph: number | null;
+}
+
 export interface WeatherSnapshot {
   apparentC: number;
   city: string | null;
   condition: WeatherCondition;
+  forecast: WeatherDay[];
   highC: number;
   humidity: number | null;
   lowC: number;
+  precipitationMm: number | null;
   temperatureC: number;
   updatedAt: string;
+  uvIndex: number | null;
   windMph: number | null;
 }
 
@@ -97,6 +117,59 @@ export function mapWeatherCode(code: number, isDay: boolean): WeatherCondition {
   return build("cloudy", "Cloudy");
 }
 
+// Number of days of daily forecast to request and surface in the expanded view.
+const forecastDays = 14;
+
+function roundOrNull(value: number | undefined): number | null {
+  return typeof value === "number" ? Math.round(value) : null;
+}
+
+function stringOrNull(value: string | undefined): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+interface DailyArrays {
+  precipitation_probability_max?: number[];
+  precipitation_sum?: number[];
+  relative_humidity_2m_mean?: number[];
+  sunrise?: string[];
+  sunset?: string[];
+  temperature_2m_max?: number[];
+  temperature_2m_min?: number[];
+  time?: string[];
+  uv_index_max?: number[];
+  weather_code?: number[];
+  wind_speed_10m_max?: number[];
+}
+
+// Transpose Open-Meteo's column-per-variable daily arrays into one record per
+// day. Daily entries are always daytime, so condition icons use the day variant.
+export function buildForecast(daily: DailyArrays): WeatherDay[] {
+  const dates = daily.time ?? [];
+  return dates.map((date, index) => {
+    const high = daily.temperature_2m_max?.[index];
+    const low = daily.temperature_2m_min?.[index];
+    return {
+      condition: mapWeatherCode(daily.weather_code?.[index] ?? 3, true),
+      date,
+      highC: Math.round(high ?? low ?? 0),
+      humidity: roundOrNull(daily.relative_humidity_2m_mean?.[index]),
+      lowC: Math.round(low ?? high ?? 0),
+      precipitationChance: roundOrNull(
+        daily.precipitation_probability_max?.[index],
+      ),
+      precipitationMm:
+        typeof daily.precipitation_sum?.[index] === "number"
+          ? Math.round(daily.precipitation_sum[index] * 10) / 10
+          : null,
+      sunrise: stringOrNull(daily.sunrise?.[index]),
+      sunset: stringOrNull(daily.sunset?.[index]),
+      uvIndex: roundOrNull(daily.uv_index_max?.[index]),
+      windMph: roundOrNull(daily.wind_speed_10m_max?.[index]),
+    };
+  });
+}
+
 export async function loadWeather(): Promise<WeatherSnapshot> {
   const location = resolveLocation();
   const url = new URL("https://api.open-meteo.com/v1/forecast");
@@ -104,13 +177,27 @@ export async function loadWeather(): Promise<WeatherSnapshot> {
   url.searchParams.set("longitude", String(location.longitude));
   url.searchParams.set(
     "current",
-    "temperature_2m,apparent_temperature,weather_code,is_day,wind_speed_10m,relative_humidity_2m",
+    "temperature_2m,apparent_temperature,weather_code,is_day,wind_speed_10m,relative_humidity_2m,precipitation,uv_index",
   );
-  url.searchParams.set("daily", "temperature_2m_max,temperature_2m_min");
+  url.searchParams.set(
+    "daily",
+    [
+      "weather_code",
+      "temperature_2m_max",
+      "temperature_2m_min",
+      "precipitation_sum",
+      "precipitation_probability_max",
+      "relative_humidity_2m_mean",
+      "wind_speed_10m_max",
+      "uv_index_max",
+      "sunrise",
+      "sunset",
+    ].join(","),
+  );
   url.searchParams.set("temperature_unit", "celsius");
   url.searchParams.set("wind_speed_unit", "mph");
   url.searchParams.set("timezone", "auto");
-  url.searchParams.set("forecast_days", "1");
+  url.searchParams.set("forecast_days", String(forecastDays));
 
   const response = await fetch(url);
 
@@ -122,36 +209,37 @@ export async function loadWeather(): Promise<WeatherSnapshot> {
     current?: {
       apparent_temperature?: number;
       is_day?: number;
+      precipitation?: number;
       relative_humidity_2m?: number;
       temperature_2m?: number;
+      uv_index?: number;
       weather_code?: number;
       wind_speed_10m?: number;
     };
-    daily?: {
-      temperature_2m_max?: number[];
-      temperature_2m_min?: number[];
-    };
+    daily?: DailyArrays;
   };
 
   const current = data.current ?? {};
   const daily = data.daily ?? {};
+  const forecast = buildForecast(daily);
+  const today = forecast[0];
   const temperature = current.temperature_2m ?? 0;
 
   return {
     apparentC: Math.round(current.apparent_temperature ?? temperature),
     city: location.city,
     condition: mapWeatherCode(current.weather_code ?? 3, current.is_day !== 0),
-    highC: Math.round(daily.temperature_2m_max?.[0] ?? temperature),
-    humidity:
-      typeof current.relative_humidity_2m === "number"
-        ? Math.round(current.relative_humidity_2m)
+    forecast,
+    highC: today?.highC ?? Math.round(temperature),
+    humidity: roundOrNull(current.relative_humidity_2m),
+    lowC: today?.lowC ?? Math.round(temperature),
+    precipitationMm:
+      typeof current.precipitation === "number"
+        ? Math.round(current.precipitation * 10) / 10
         : null,
-    lowC: Math.round(daily.temperature_2m_min?.[0] ?? temperature),
     temperatureC: Math.round(temperature),
     updatedAt: new Date().toISOString(),
-    windMph:
-      typeof current.wind_speed_10m === "number"
-        ? Math.round(current.wind_speed_10m)
-        : null,
+    uvIndex: roundOrNull(current.uv_index),
+    windMph: roundOrNull(current.wind_speed_10m),
   };
 }

@@ -1,3 +1,6 @@
+import { appendFileSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { transcriptContainsWakePhrase } from "./gating";
 import {
   createListenerState,
@@ -8,16 +11,23 @@ import {
   type ListenerEvent,
   type ListenerState,
 } from "./listenerMachine";
-import { endConversationToolName, type LiveEvent, type LiveSessionHandlers } from "./liveSession";
+import {
+  endConversationToolName,
+  type LiveEvent,
+  type LiveSessionHandlers,
+} from "./liveSession";
 import type { LocalTranscriber } from "./localTranscriber";
-import type { SpeakerGateLike } from "./speakerGate";
 
 // The subset of GeminiLiveSession the controller depends on (so tests can fake
 // it without a websocket).
 export interface LiveSessionLike {
   start(handlers: LiveSessionHandlers): Promise<void>;
   sendAudioFrame(frame: string): void;
-  sendToolResponse(id: string, name: string, response: Record<string, unknown>): void;
+  sendToolResponse(
+    id: string,
+    name: string,
+    response: Record<string, unknown>,
+  ): void;
   close(): Promise<void>;
 }
 
@@ -26,7 +36,11 @@ export type LiveStateEvent =
   | { type: "inputTranscript"; text: string }
   | { type: "outputTranscript"; text: string }
   | { type: "status"; message: string }
-  | { type: "listener"; state: "loading" | "ready" | "offline"; detail?: string }
+  | {
+      type: "listener";
+      state: "loading" | "ready" | "offline";
+      detail?: string;
+    }
   | { type: "localHeard"; text: string; phase: string }
   | { type: "interrupted" }
   | { type: "turnComplete" };
@@ -53,27 +67,54 @@ export interface LiveControllerOptions {
   createSession: () => LiveSessionLike;
   sink: LiveControllerSink;
   runTool?: ToolRunner;
-  // Optional speaker hard-lock: enroll the invoker and forward only their voice.
-  createGate?: () => SpeakerGateLike;
-  // Returns the enrolled family's voiceprints so the gate can match the wake
-  // utterance against them. If absent, the gate falls back to open-mic mode.
-  getVoiceprints?: () => Promise<{ id: string; vec: number[] }[]>;
+  // Called whenever a session ends, so any full-screen dashboard quadrant the
+  // assistant (or user) opened collapses back to the grid.
+  resetDashboardFocus?: () => void;
   wakePhrases?: string[];
   config?: ListenerConfig;
   idleTimeoutMs?: number;
 }
 
-const defaultWakePhrases = ["james"];
+const defaultWakePhrases = ["hey james"];
 const defaultIdleTimeoutMs = 18_000;
+
+// Diagnostic trace for the wake → gate → Gemini path. Prints to the main-process
+// console AND appends to ~/.familyhub/live-debug.log, so a packaged build launched
+// via `open` (no attached terminal) is still observable. Set FAMILYHUB_DEBUG=0 to
+// silence.
+const debugLogPath = join(homedir(), ".familyhub", "live-debug.log");
+let debugLogDirReady = false;
+
+function debug(message: string): void {
+  if (process.env.FAMILYHUB_DEBUG === "0") {
+    return;
+  }
+
+  const line = `${new Date().toISOString()} [live] ${message}`;
+  console.error(line);
+
+  // Skip the file write under tests so the suite doesn't touch the real home dir.
+  if (process.env.VITEST) {
+    return;
+  }
+
+  try {
+    if (!debugLogDirReady) {
+      mkdirSync(dirname(debugLogPath), { recursive: true });
+      debugLogDirReady = true;
+    }
+    appendFileSync(debugLogPath, `${line}\n`);
+  } catch {
+    // Best effort — never let logging break the live path.
+  }
+}
 
 export class LiveController {
   private readonly createTranscriber: () => LocalTranscriber;
   private readonly createSession: () => LiveSessionLike;
   private readonly sink: LiveControllerSink;
   private readonly runTool: ToolRunner | null;
-  private readonly createGate: (() => SpeakerGateLike) | null;
-  private readonly getVoiceprints: (() => Promise<{ id: string; vec: number[] }[]>) | null;
-  private gate: SpeakerGateLike | null = null;
+  private readonly resetDashboardFocus: (() => void) | null;
   private readonly wakePhrases: string[];
   private readonly config: ListenerConfig;
   private readonly idleTimeoutMs: number;
@@ -82,10 +123,7 @@ export class LiveController {
   private session: LiveSessionLike | null = null;
   private state: ListenerState = createListenerState();
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
-  private endFallbackTimer: ReturnType<typeof setTimeout> | null = null;
   private finalized = true;
-  private endRequested = false;
-  private endReason = "goodbye";
   private inputTurnBuffer = "";
   private outputTurnBuffer = "";
   private pendingReason: string | null = null;
@@ -96,8 +134,7 @@ export class LiveController {
     this.createSession = options.createSession;
     this.sink = options.sink;
     this.runTool = options.runTool ?? null;
-    this.createGate = options.createGate ?? null;
-    this.getVoiceprints = options.getVoiceprints ?? null;
+    this.resetDashboardFocus = options.resetDashboardFocus ?? null;
     this.wakePhrases = options.wakePhrases ?? defaultWakePhrases;
     this.config = options.config ?? defaultListenerConfig;
     this.idleTimeoutMs = options.idleTimeoutMs ?? defaultIdleTimeoutMs;
@@ -128,7 +165,11 @@ export class LiveController {
         } else {
           // Pre-ready stderr is model download/load progress; surface it so the
           // UI shows movement instead of an opaque wait (first run is ~600 MB).
-          this.sink.sendLive({ type: "listener", state: "loading", detail: message });
+          this.sink.sendLive({
+            type: "listener",
+            state: "loading",
+            detail: message,
+          });
         }
       },
       onExit: () => {
@@ -140,24 +181,6 @@ export class LiveController {
 
     this.sink.sendLive({ type: "listener", state: "loading" });
     transcriber.reset();
-
-    if (this.createGate) {
-      this.gate = this.createGate();
-      await this.gate.start({
-        onForward: (audio) => this.session?.sendAudioFrame(audio),
-        onDecision: (decision) => {
-          if (decision.type === "rejected") {
-            this.sink.noteInfo("🔒 not a recognized voice — ending session.");
-            void this.closeSession();
-          } else if (decision.type === "dropped") {
-            this.sink.noteInfo(`🔇 ignored a different voice (${decision.score ?? "?"})`);
-          }
-        },
-      });
-      if (this.getVoiceprints) {
-        this.gate.loadVoiceprints(await this.getVoiceprints());
-      }
-    }
   }
 
   handleFrame(frame: string): void {
@@ -180,10 +203,8 @@ export class LiveController {
     this.pendingReason = "stopped";
     this.apply({ type: "stop" });
     const transcriber = this.transcriber;
-    const gate = this.gate;
     this.transcriber = null;
-    this.gate = null;
-    await Promise.all([transcriber?.stop(), gate?.stop()]);
+    await transcriber?.stop();
   }
 
   private handleTranscript(text: string): void {
@@ -192,7 +213,11 @@ export class LiveController {
     // Diagnostic: surface every transcript + the current phase so the wake path
     // is observable (is the listener still hearing after a session ends?).
     if (trimmed.length > 0) {
-      this.sink.sendLive({ type: "localHeard", text: trimmed, phase: this.state.phase });
+      this.sink.sendLive({
+        type: "localHeard",
+        text: trimmed,
+        phase: this.state.phase,
+      });
     }
 
     if (this.state.phase !== "idle") {
@@ -221,13 +246,7 @@ export class LiveController {
         break;
       case "sendFrames":
         for (const frame of effect.frames) {
-          if (this.gate) {
-            // Route live audio through the speaker gate; it forwards only the
-            // locked speaker's utterances to the session (via onForward).
-            this.gate.feed(frame);
-          } else {
-            this.session?.sendAudioFrame(frame);
-          }
+          this.session?.sendAudioFrame(frame);
         }
         break;
       case "closeSession":
@@ -240,31 +259,38 @@ export class LiveController {
     const session = this.createSession();
     this.session = session;
     this.finalized = false;
-    this.endRequested = false;
     this.pendingReason = null;
     this.inputTurnBuffer = "";
     this.outputTurnBuffer = "";
-    this.gate?.reset(); // new session → re-enroll the next speaker
-    if (this.gate && this.getVoiceprints) {
-      this.gate.loadVoiceprints(await this.getVoiceprints());
-    }
     this.sink.sendLive({ type: "status", message: "Connecting…" });
 
+    debug("connecting to Gemini Live…");
     try {
       await session.start({
         onEvent: (event) => this.handleLiveEvent(event),
-        onClosed: (reason) => this.finalize(reason),
-        onError: (message) => this.sink.sendLive({ type: "status", message }),
+        onClosed: (reason) => {
+          debug(`gemini closed: ${reason}`);
+          this.finalize(reason);
+        },
+        onError: (message) => {
+          debug(`gemini error: ${message}`);
+          this.sink.sendLive({ type: "status", message });
+        },
       });
     } catch (error) {
+      debug(`connect failed: ${readErrorMessage(error)}`);
       this.finalize(`could not connect: ${readErrorMessage(error)}`);
       return;
     }
 
+    debug("session open — streaming live audio");
     this.apply({ type: "sessionOpen" });
     this.sink.noteInfo("Wake word heard — live session started.");
     this.sink.sendLive({ type: "mode", mode: "live" });
-    this.sink.sendLive({ type: "status", message: "Live — go ahead and talk." });
+    this.sink.sendLive({
+      type: "status",
+      message: "Live — go ahead and talk.",
+    });
     this.sink.emitSnapshot();
     this.armIdleTimer();
   }
@@ -290,7 +316,6 @@ export class LiveController {
     this.clearTimers();
     this.inputTurnBuffer = "";
     this.outputTurnBuffer = "";
-    this.endRequested = false;
 
     const effectiveReason = this.pendingReason ?? reason;
     this.pendingReason = null;
@@ -300,7 +325,8 @@ export class LiveController {
     }
 
     this.transcriber?.reset();
-    this.gate?.reset();
+    // Collapse any full-screen quadrant the session opened, back to the grid.
+    this.resetDashboardFocus?.();
     this.sink.noteInfo(`Live session ended (${effectiveReason}).`);
     this.sink.sendLive({
       type: "status",
@@ -317,39 +343,58 @@ export class LiveController {
       return;
     }
 
+    // Trace what Gemini sends back. A healthy turn shows: inputTranscript →
+    // outputTranscript/audio → turnComplete. Seeing only inputTranscript (never
+    // output or turnComplete) means the turn boundary never registered.
+    debug(
+      `← ${event.kind}${
+        event.kind === "inputTranscript" || event.kind === "outputTranscript"
+          ? `: "${event.text}"`
+          : event.kind === "toolCall"
+            ? `: ${event.name}`
+            : ""
+      }`,
+    );
+
     switch (event.kind) {
       case "inputTranscript":
         this.inputTurnBuffer += event.text;
         this.armIdleTimer();
-        this.sink.sendLive({ type: "inputTranscript", text: this.inputTurnBuffer });
+        this.sink.sendLive({
+          type: "inputTranscript",
+          text: this.inputTurnBuffer,
+        });
         break;
       case "outputTranscript":
         this.outputTurnBuffer += event.text;
-        this.sink.sendLive({ type: "outputTranscript", text: this.outputTurnBuffer });
+        this.sink.sendLive({
+          type: "outputTranscript",
+          text: this.outputTurnBuffer,
+        });
         break;
       case "audio":
         this.sink.sendLiveAudio({ data: event.data, mimeType: event.mimeType });
         break;
       case "toolCall":
         if (event.name === endConversationToolName) {
-          this.session?.sendToolResponse(event.id, event.name, { status: "ended" });
-          this.endRequested = true;
-          this.endReason =
+          this.session?.sendToolResponse(event.id, event.name, {
+            status: "ended",
+          });
+          // James is instructed to give no spoken farewell, so there is no
+          // audio left to play: tear down right away instead of waiting for
+          // the (1–2 s later) turnComplete that would otherwise gate the close.
+          this.pendingReason =
             typeof event.args.reason === "string" && event.args.reason.trim()
               ? event.args.reason.trim()
               : "said goodbye";
-
-          if (this.endFallbackTimer) {
-            clearTimeout(this.endFallbackTimer);
-          }
-
-          this.endFallbackTimer = setTimeout(() => {
-            this.pendingReason = this.endReason;
-            this.apply({ type: "stop" });
-          }, 5_000);
+          this.apply({ type: "stop" });
+          return;
         } else {
           // Calendar/Reminders tool — run it and return the result to Gemini.
-          this.armIdleTimer();
+          // Pause the idle timer while the tool runs: a slow AppleScript (e.g.
+          // completing a reminder) is legitimate work, not silence, and must not
+          // trip the timeout mid-call. runToolCall re-arms it once it responds.
+          this.clearIdleTimer();
           void this.runToolCall(event.id, event.name, event.args);
         }
         break;
@@ -370,12 +415,6 @@ export class LiveController {
         this.outputTurnBuffer = "";
         this.sink.sendLive({ type: "turnComplete" });
         this.sink.emitSnapshot();
-
-        if (this.endRequested) {
-          this.pendingReason = this.endReason;
-          this.apply({ type: "stop" });
-          return;
-        }
 
         this.armIdleTimer();
         break;
@@ -408,6 +447,11 @@ export class LiveController {
     // The session may have ended while the tool ran.
     this.session?.sendToolResponse(id, name, result);
     this.sink.emitSnapshot();
+
+    // Resume the idle countdown now that the model has its result and can reply.
+    if (!this.finalized) {
+      this.armIdleTimer();
+    }
   }
 
   private armIdleTimer(): void {
@@ -421,15 +465,17 @@ export class LiveController {
     }, this.idleTimeoutMs);
   }
 
-  private clearTimers(): void {
+  private clearIdleTimer(): void {
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;
     }
+  }
 
-    if (this.endFallbackTimer) {
-      clearTimeout(this.endFallbackTimer);
-      this.endFallbackTimer = null;
+  private clearTimers(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
     }
   }
 }

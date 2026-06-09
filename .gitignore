@@ -26,3 +26,6 @@ sidecar/training/smoke_model/
 sidecar/training/piper-sample-generator/
 sidecar/training/dl.py
 sidecar/training/smoke.yml
+
+# Stray bundled main-process build artifact (real entry is apps/electron/out/main/index.js)
+/index.js

@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 
-export function RemindersPanel(): React.JSX.Element {
+export function RemindersPanel({
+  focusList,
+}: {
+  // When set (e.g. the assistant is talking about "To Buy"), select that list's
+  // tab. Matched against the list names case-insensitively.
+  focusList?: string | null;
+} = {}): React.JSX.Element {
   const [result, setResult] = useState<RemindersResult | null>(null);
   const [activeTab, setActiveTab] = useState(0);
   const [connecting, setConnecting] = useState(false);
@@ -15,6 +21,28 @@ export function RemindersPanel(): React.JSX.Element {
 
     return window.familyHub.dashboard.onReminders(setResult);
   }, []);
+
+  useEffect(() => {
+    if (!focusList || result?.status !== "ok") {
+      return;
+    }
+
+    const target = focusList.trim().toLowerCase();
+    const exact = result.lists.findIndex(
+      (reminderList) => reminderList.name.trim().toLowerCase() === target,
+    );
+    const index =
+      exact >= 0
+        ? exact
+        : result.lists.findIndex((reminderList) => {
+            const name = reminderList.name.trim().toLowerCase();
+            return name.includes(target) || target.includes(name);
+          });
+
+    if (index >= 0) {
+      setActiveTab(index);
+    }
+  }, [focusList, result]);
 
   function connect(): void {
     setConnecting(true);

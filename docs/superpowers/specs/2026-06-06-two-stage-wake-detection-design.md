@@ -65,6 +65,30 @@ threshold was guarding against.
 Everything new lives in the sidecar. The renderer, IPC transport, listener
 state machine, and `GeminiLiveSession` are all unchanged.
 
+### Implementation finding (2026-06-06): post-trigger window + free decode
+
+During implementation, offline tests against the **real** engine revealed that
+`james.onnx` fires *before* the wake word finishes. At fire-time the ring holds
+only `"hey ja…"`, which is acoustically identical for "hey **ja**mes" and
+"hey **ja**son". Two consequences: (1) a constrained Vosk grammar
+`["hey james","[unk]"]` **force-maps** that fragment to "james" → a false wake on
+"hey jason"; (2) some real "hey james" utterances **miss** because Stage 1 fires
+during "hey", before "james" is in the buffer. One timing bug, both symptoms.
+
+**Fix (supersedes the "fire-time constrained-grammar decode" below):**
+- When Stage 1 fires, do **not** confirm immediately. Collect a **post-trigger
+  window** (~1 s of additional frames) so the *full* wake word lands in the ring,
+  then run Stage 2. This fixes both the misses and the truncation-driven false
+  wakes.
+- Stage 2 uses a **free (unconstrained) Vosk decode** + `phrase_confirmed`, not a
+  constrained grammar. Free decode never force-maps "jason"→"james", and its
+  confidences are real (not grammar-forced 1.0), so the gate is meaningful.
+  Verified offline: free decode transcribes "hey james" correctly across voices
+  and rejects "hey jason" / bare "james".
+
+The constrained-grammar description below is retained for history; the shipped
+engine uses the post-trigger window + free decode.
+
 ### New `TwoStageEngine` (in `wake_listener.py`, becomes the default engine)
 
 Responsibilities and interface mirror the existing engines (`feed(pcm_bytes) ->

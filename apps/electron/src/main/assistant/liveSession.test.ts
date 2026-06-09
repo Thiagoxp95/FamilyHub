@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GeminiLiveSession,
   interpretLiveMessage,
@@ -13,11 +13,39 @@ vi.mock("@google/genai", () => ({
     return { live: { connect: connectMock } };
   }),
   Modality: { AUDIO: "AUDIO" },
-  Type: { OBJECT: "OBJECT", STRING: "STRING" },
+  Type: {
+    ARRAY: "ARRAY",
+    BOOLEAN: "BOOLEAN",
+    NUMBER: "NUMBER",
+    OBJECT: "OBJECT",
+    STRING: "STRING",
+  },
 }));
 
 function interpret(message: unknown): LiveEvent[] {
   return interpretLiveMessage(message as LiveServerMessage);
+}
+
+// start() now resolves only after the server's `setupComplete`. connect() itself
+// just opens the socket, so the mock must deliver setupComplete via onmessage or
+// start() would hang. Returns the fake session for assertions.
+function mockConnectReady(): {
+  close: ReturnType<typeof vi.fn>;
+  sendRealtimeInput: ReturnType<typeof vi.fn>;
+  sendToolResponse: ReturnType<typeof vi.fn>;
+} {
+  const session = {
+    close: vi.fn(),
+    sendRealtimeInput: vi.fn(),
+    sendToolResponse: vi.fn(),
+  };
+  connectMock.mockImplementationOnce(
+    (params: { callbacks: { onmessage: (message: unknown) => void } }) => {
+      queueMicrotask(() => params.callbacks.onmessage({ setupComplete: {} }));
+      return Promise.resolve(session);
+    },
+  );
+  return session;
 }
 
 describe("interpretLiveMessage", () => {
@@ -97,12 +125,14 @@ describe("interpretLiveMessage", () => {
 });
 
 describe("GeminiLiveSession", () => {
+  // connectMock accumulates calls across tests; clear so calls[0] is always the
+  // connect made by the test currently running.
+  beforeEach(() => {
+    connectMock.mockClear();
+  });
+
   it("tells the model James is the assistant identity, not a family member", async () => {
-    connectMock.mockResolvedValueOnce({
-      close: vi.fn(),
-      sendRealtimeInput: vi.fn(),
-      sendToolResponse: vi.fn(),
-    });
+    mockConnectReady();
 
     await new GeminiLiveSession({ apiKey: "test-key" }).start({
       onClosed: vi.fn(),
@@ -117,5 +147,82 @@ describe("GeminiLiveSession", () => {
     expect(instruction).toContain(
       "James is your assistant name, not a family member or calendar owner.",
     );
+  });
+
+  it("tells the model to end silently with no spoken farewell", async () => {
+    mockConnectReady();
+
+    await new GeminiLiveSession({ apiKey: "test-key" }).start({
+      onClosed: vi.fn(),
+      onError: vi.fn(),
+      onEvent: vi.fn(),
+    });
+
+    const connectConfig = connectMock.mock.calls[0]?.[0];
+    const instruction =
+      connectConfig?.config?.systemInstruction?.parts?.[0]?.text;
+
+    expect(instruction).toContain("no spoken farewell");
+  });
+
+  it("tells the model to manage notes and zoom the active dashboard quadrant", async () => {
+    mockConnectReady();
+
+    await new GeminiLiveSession({ apiKey: "test-key" }).start({
+      onClosed: vi.fn(),
+      onError: vi.fn(),
+      onEvent: vi.fn(),
+    });
+
+    const connectConfig = connectMock.mock.calls[0]?.[0];
+    const instruction =
+      connectConfig?.config?.systemInstruction?.parts?.[0]?.text;
+
+    expect(instruction).toContain("family Calendar, Reminders, and Notes");
+    expect(instruction).toContain("show_notes_card");
+    expect(instruction).toContain("show_weather_card");
+  });
+
+  it("registers note CRUD tools and quadrant focus tools", async () => {
+    mockConnectReady();
+
+    await new GeminiLiveSession({ apiKey: "test-key" }).start({
+      onClosed: vi.fn(),
+      onError: vi.fn(),
+      onEvent: vi.fn(),
+    });
+
+    const connectConfig = connectMock.mock.calls[0]?.[0];
+    // Tools is a heterogeneous list (e.g. { googleSearch: {} } alongside our
+    // { functionDeclarations: [...] }), so find the entry by content rather than
+    // index — adding a built-in tool must not shift this assertion.
+    const declarations =
+      connectConfig?.config?.tools?.find(
+        (tool: { functionDeclarations?: unknown[] }) => tool.functionDeclarations,
+      )?.functionDeclarations ?? [];
+    const names = declarations.map((tool: { name?: string }) => tool.name);
+
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "get_notes",
+        "create_note",
+        "update_note",
+        "delete_note",
+        "get_weather",
+        "show_calendar_card",
+        "hide_calendar_card",
+        "show_weather_card",
+        "hide_weather_card",
+        "show_reminders_card",
+        "hide_reminders_card",
+        "show_notes_card",
+        "hide_notes_card",
+      ]),
+    );
+
+    const createNote = declarations.find(
+      (tool: { name?: string }) => tool.name === "create_note",
+    );
+    expect(createNote?.parameters?.required).toEqual(["text", "emoji"]);
   });
 });

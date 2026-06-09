@@ -6,18 +6,6 @@ interface AssistantConfigStatus {
   localListener: boolean;
 }
 
-interface SpeakerProfileSummary {
-  allowed: boolean;
-  createdAt: string;
-  id: string;
-  name: string;
-}
-
-interface EnrolledSpeaker extends SpeakerProfileSummary {
-  sampleCount: number;
-  hasVoiceprint: boolean;
-}
-
 interface AssistantEvent {
   at: string;
   message: string;
@@ -26,34 +14,12 @@ interface AssistantEvent {
 
 interface AssistantSnapshot {
   config: AssistantConfigStatus;
-  currentSpeakerName: string | null;
   events: AssistantEvent[];
   isListening: boolean;
   lastAssistantResponse: string | null;
   lastTranscript: string | null;
-  lockedSpeakerLabel: string | null;
-  sessionExpiresAt: string | null;
-  speakers: EnrolledSpeaker[];
   wakePhrase: string;
 }
-
-type TranscriptTurnResult =
-  | {
-      accepted: true;
-      assistantResponse: string;
-      speakerLabel: string;
-      speakerName: string;
-    }
-  | {
-      accepted: false;
-      reason:
-        | "session_ended"
-        | "speaker_label_mismatch"
-        | "wake_command_missing"
-        | "wake_phrase_missing";
-      speakerLabel: string;
-      speakerName?: string;
-    };
 
 type LiveMode = "wake" | "live";
 
@@ -73,37 +39,14 @@ interface LiveAudioChunk {
 }
 
 interface AssistantBridge {
-  deleteSpeaker: (speakerId: string) => Promise<boolean>;
-  enrollSpeaker: (name: string) => Promise<SpeakerProfileSummary>;
-  finalizeEnrollment: (speakerId: string) => Promise<void>;
   getSnapshot: () => Promise<AssistantSnapshot>;
-  lockSessionSpeaker: (
-    speakerId: string,
-    speakerLabel: string,
-  ) => Promise<AssistantSnapshot>;
   onSnapshot: (callback: (snapshot: AssistantSnapshot) => void) => () => void;
-  setSpeakerAllowed: (
-    speakerId: string,
-    allowed: boolean,
-  ) => Promise<SpeakerProfileSummary | null>;
   startListening: () => Promise<AssistantSnapshot>;
   stopListening: () => Promise<AssistantSnapshot>;
-  submitAudioChunk: (
-    audio: Uint8Array,
-    sampleRateHertz: number,
-  ) => Promise<TranscriptTurnResult[]>;
-  submitTranscript: (
-    transcript: string,
-    speakerLabel: string,
-  ) => Promise<TranscriptTurnResult>;
   sendMicFrame: (frame: string) => void;
   endLive: () => Promise<boolean>;
   onLive: (callback: (event: LiveStateEvent) => void) => () => void;
   onLiveAudio: (callback: (chunk: LiveAudioChunk) => void) => () => void;
-  saveEnrollmentClip: (
-    speakerId: string,
-    audioBase64: string,
-  ) => Promise<{ sampleCount: number }>;
 }
 
 type UpdateState =
@@ -150,15 +93,32 @@ interface WeatherCondition {
   label: string;
 }
 
+interface WeatherDay {
+  condition: WeatherCondition;
+  date: string;
+  highC: number;
+  humidity: number | null;
+  lowC: number;
+  precipitationChance: number | null;
+  precipitationMm: number | null;
+  sunrise: string | null;
+  sunset: string | null;
+  uvIndex: number | null;
+  windMph: number | null;
+}
+
 interface WeatherSnapshot {
   apparentC: number;
   city: string | null;
   condition: WeatherCondition;
+  forecast: WeatherDay[];
   highC: number;
   humidity: number | null;
   lowC: number;
+  precipitationMm: number | null;
   temperatureC: number;
   updatedAt: string;
+  uvIndex: number | null;
   windMph: number | null;
 }
 
@@ -182,6 +142,7 @@ type CalendarResult =
 
 interface ReminderItem {
   due?: string;
+  id?: string;
   title: string;
 }
 
@@ -195,6 +156,37 @@ type RemindersResult =
   | { status: "denied" }
   | { status: "error"; error: string };
 
+type DashboardPanel = "calendar" | "weather" | "reminders" | "notes" | null;
+
+type NoteColor = "yellow" | "pink" | "mint" | "blue" | "orange";
+
+interface Note {
+  id: string;
+  text: string;
+  emoji?: string;
+  color: NoteColor;
+  x: number;
+  y: number;
+  rotation: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface NoteInput {
+  text: string;
+  emoji?: string;
+  color?: NoteColor;
+}
+
+interface NotePatch {
+  text?: string;
+  emoji?: string;
+  color?: NoteColor;
+  x?: number;
+  y?: number;
+  rotation?: number;
+}
+
 interface DashboardBridge {
   getWeather: () => Promise<WeatherResult>;
   onWeather: (callback: (result: WeatherResult) => void) => () => void;
@@ -202,6 +194,15 @@ interface DashboardBridge {
   onCalendar: (callback: (result: CalendarResult) => void) => () => void;
   getReminders: () => Promise<RemindersResult>;
   onReminders: (callback: (result: RemindersResult) => void) => () => void;
+  getNotes: () => Promise<Note[]>;
+  onNotes: (callback: (notes: Note[]) => void) => () => void;
+  getFocusedPanel: () => Promise<DashboardPanel>;
+  onFocus: (callback: (panel: DashboardPanel) => void) => () => void;
+  getReminderList: () => Promise<string | null>;
+  onReminderList: (callback: (list: string | null) => void) => () => void;
+  createNote: (input: NoteInput) => Promise<Note>;
+  updateNote: (id: string, patch: NotePatch) => Promise<Note | null>;
+  deleteNote: (id: string) => Promise<{ deleted: true; id: string }>;
   connectCalendar: () => Promise<CalendarResult>;
   connectReminders: () => Promise<RemindersResult>;
 }

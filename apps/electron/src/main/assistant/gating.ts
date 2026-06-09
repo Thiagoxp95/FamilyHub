@@ -1,66 +1,6 @@
-import type { SessionSpeakerGateDecision } from "./types";
-
-interface EvaluateWakeSessionTurnInput {
-  lockedSpeakerLabel: string | null;
-  transcript: string;
-  turnSpeakerLabel: string;
-  wakePhrases: string[];
-}
-
-export function evaluateWakeSessionTurn({
-  lockedSpeakerLabel,
-  transcript,
-  turnSpeakerLabel,
-  wakePhrases,
-}: EvaluateWakeSessionTurnInput): SessionSpeakerGateDecision {
-  if (lockedSpeakerLabel && lockedSpeakerLabel !== turnSpeakerLabel) {
-    return {
-      accepted: false,
-      reason: "speaker_label_mismatch",
-      sessionStarted: false,
-    };
-  }
-
-  if (lockedSpeakerLabel) {
-    return {
-      accepted: true,
-      prompt: stripWakePhrase(transcript, wakePhrases),
-      reason: "accepted",
-      sessionStarted: false,
-    };
-  }
-
-  const command = extractWakeCommand(transcript, wakePhrases);
-
-  if (!command.woke) {
-    return {
-      accepted: false,
-      reason: "wake_phrase_missing",
-      sessionStarted: false,
-    };
-  }
-
-  if (command.prompt.length === 0) {
-    return {
-      accepted: false,
-      reason: "wake_command_missing",
-      sessionStarted: true,
-    };
-  }
-
-  return {
-    accepted: true,
-    prompt: command.prompt,
-    reason: "accepted",
-    sessionStarted: true,
-  };
-}
-
-// Common ASR mis-spellings of single-word wake words, so a slightly misheard
-// utterance still wakes. Recall matters more than precision here — a false
-// positive just opens a live session that times out on silence — but we use a
-// curated list rather than edit-distance so ordinary words ("names", "jameson")
-// don't trigger.
+// Common ASR mis-spellings of wake phrase tokens, so a slightly misheard
+// assistant name still wakes. Keep this curated rather than edit-distance so
+// ordinary words ("names", "jameson") don't trigger.
 const wakeWordAliases: Record<string, readonly string[]> = {
   james: ["jaymes", "jaimes", "jamez", "jaymz", "hames", "jaymez"],
 };
@@ -73,9 +13,8 @@ function tokenMatchesWord(token: string, word: string): boolean {
   return wakeWordAliases[word]?.includes(token) ?? false;
 }
 
-// Lenient wake check for the live-audio trigger: does the (arbitrarily chunked)
-// transcript contain a wake phrase anywhere? A false positive only opens a live
-// session that closes itself on silence, so erring toward sensitivity is fine.
+// Wake check for the live-audio trigger: does the normalized transcript contain
+// a complete wake phrase as a contiguous token run?
 export function transcriptContainsWakePhrase(
   transcript: string,
   wakePhrases: string[],
@@ -96,12 +35,27 @@ export function transcriptContainsWakePhrase(
       return false;
     }
 
-    if (words.length === 1) {
-      return tokens.some((token) => tokenMatchesWord(token, firstWord));
-    }
-
-    return normalized.includes(words.join(" "));
+    return tokenWindowMatches(tokens, words);
   });
+}
+
+function tokenWindowMatches(tokens: string[], words: string[]): boolean {
+  if (words.length === 0 || words.length > tokens.length) {
+    return false;
+  }
+
+  for (let start = 0; start <= tokens.length - words.length; start += 1) {
+    const windowMatches = words.every((word, offset) => {
+      const token = tokens[start + offset];
+      return token !== undefined && tokenMatchesWord(token, word);
+    });
+
+    if (windowMatches) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export function isSessionEndCommand(transcript: string): boolean {
@@ -119,36 +73,9 @@ export function isSessionEndCommand(transcript: string): boolean {
     "that's all",
   ];
 
-  return endCommands.some((command) => normalized === normalizeTranscript(command));
-}
-
-function extractWakeCommand(
-  transcript: string,
-  wakePhrases: string[],
-): { prompt: string; woke: boolean } {
-  const matchedPhrase = wakePhrases
-    .map((phrase) => createWakePhrasePattern(phrase).exec(transcript))
-    .find((match) => match !== null);
-
-  if (!matchedPhrase) {
-    return {
-      prompt: "",
-      woke: false,
-    };
-  }
-
-  return {
-    prompt: transcript
-      .slice(matchedPhrase[0].length)
-      .replace(/^[\s,.:;!?-]+/, "")
-      .trim(),
-    woke: true,
-  };
-}
-
-function stripWakePhrase(transcript: string, wakePhrases: string[]): string {
-  const command = extractWakeCommand(transcript, wakePhrases);
-  return command.woke ? command.prompt : transcript;
+  return endCommands.some(
+    (command) => normalized === normalizeTranscript(command),
+  );
 }
 
 function normalizeTranscript(value: string): string {
@@ -159,14 +86,4 @@ function normalizeTranscript(value: string): string {
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function createWakePhrasePattern(phrase: string): RegExp {
-  const words = normalizeTranscript(phrase).split(" ").filter(Boolean);
-  const source = words.map(escapeRegExp).join("[^a-z0-9]+");
-  return new RegExp(`^\\s*${source}(?:\\b|$)`, "i");
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

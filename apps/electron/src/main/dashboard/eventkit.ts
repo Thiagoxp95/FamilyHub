@@ -29,6 +29,9 @@ export type CalendarResult =
 
 export interface ReminderItem {
   due?: string;
+  // Apple Reminders id (x-apple-reminder://…). Carried so the assistant can act
+  // on a specific item from cached data without a slow re-scan. Not shown in UI.
+  id?: string;
   title: string;
 }
 
@@ -114,7 +117,7 @@ tell application "Reminders"
           set dd to due date of r
           if dd is not missing value then set dueText to my isoOf(dd)
         end try
-        set output to output & listName & US & (name of r) & US & dueText & RS
+        set output to output & (id of r) & US & listName & US & (name of r) & US & dueText & RS
       end repeat
     end try
   end repeat
@@ -241,9 +244,10 @@ export function parseReminders(raw: string): ReminderList[] {
     }
 
     const fields = record.split(US);
-    const rawName = fields[0];
-    const title = fields[1];
-    const due = fields[2];
+    const id = fields[0];
+    const rawName = fields[1];
+    const title = fields[2];
+    const due = fields[3];
     const name = rawName && rawName.trim() ? rawName : "Reminders";
 
     let items = byList.get(name);
@@ -256,6 +260,9 @@ export function parseReminders(raw: string): ReminderList[] {
     const item: ReminderItem = {
       title: title && title.trim() ? title : "(untitled)",
     };
+    if (id && id.trim()) {
+      item.id = id;
+    }
     if (due && due.trim()) {
       item.due = due;
     }

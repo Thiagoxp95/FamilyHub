@@ -7,6 +7,11 @@ import electronUpdater from "electron-updater";
 
 const updaterStatusChannel = "updater:status";
 const updateCheckIntervalMs = 6 * 60 * 60 * 1000;
+// On a mouseless, always-on kitchen display nobody clicks "Restart", so a
+// downloaded update would never apply. Once it's downloaded, install it silently
+// and relaunch after a short grace delay (long enough to avoid cutting off a
+// just-finished interaction, short enough that the display self-heals to latest).
+const autoInstallDelayMs = 60 * 1000;
 
 export type UpdateState =
   | "idle"
@@ -50,10 +55,12 @@ export interface UpdaterWindow {
 }
 
 export function createUpdaterController({
+  autoInstallOnDownloaded = false,
   broadcaster,
   isPackaged,
   updater,
 }: {
+  autoInstallOnDownloaded?: boolean;
   broadcaster: UpdaterBroadcaster;
   isPackaged: boolean;
   updater: UpdaterAdapter;
@@ -62,6 +69,7 @@ export function createUpdaterController({
   let intervalId: NodeJS.Timeout | null = null;
   let checkPromise: Promise<UpdaterStatus> | null = null;
   let startPromise: Promise<void> | null = null;
+  let autoInstallTimer: NodeJS.Timeout | null = null;
   // Background checks (launch + 6h poll) must fail seamlessly on an always-on
   // kitchen display — a sideloaded build has no update feed and GitHub can blip.
   // Only surface the loud red error state when the user explicitly asked.
@@ -106,6 +114,19 @@ export function createUpdaterController({
     return version === undefined ? { state } : { state, version };
   }
 
+  function scheduleAutoInstall(): void {
+    if (!isPackaged || !autoInstallOnDownloaded || autoInstallTimer) {
+      return;
+    }
+
+    autoInstallTimer = setTimeout(() => {
+      // Silent install (no Squirrel prompt) + relaunch, so the display comes
+      // back up on the new version without anyone touching it.
+      updater.quitAndInstall(true, true);
+    }, autoInstallDelayMs);
+    autoInstallTimer.unref?.();
+  }
+
   if (isPackaged) {
     updater.autoDownload = true;
   }
@@ -132,6 +153,7 @@ export function createUpdaterController({
   });
   updater.on("update-downloaded", (info) => {
     publish(withVersion("downloaded", readVersion(info)));
+    scheduleAutoInstall();
   });
   updater.on("error", (error) => {
     publishCheckError(error);
@@ -217,6 +239,7 @@ export function registerUpdaterIpc({
   updater?: UpdaterAdapter;
 }): UpdaterController {
   const controller = createUpdaterController({
+    autoInstallOnDownloaded: true,
     broadcaster: {
       broadcast(channel, payload) {
         for (const window of getAllWindows()) {

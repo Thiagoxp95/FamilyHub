@@ -16,26 +16,8 @@ function makeSubscription(channel: string) {
 
 contextBridge.exposeInMainWorld("familyHub", {
   assistant: {
-    deleteSpeaker: (speakerId: string) =>
-      ipcRenderer.invoke("assistant:deleteSpeaker", speakerId) as Promise<boolean>,
-    enrollSpeaker: (name: string) =>
-      ipcRenderer.invoke("assistant:enrollSpeaker", name) as Promise<unknown>,
-    saveEnrollmentClip: (speakerId: string, audioBase64: string) =>
-      ipcRenderer.invoke(
-        "assistant:saveEnrollmentClip",
-        speakerId,
-        audioBase64,
-      ) as Promise<{ sampleCount: number }>,
-    finalizeEnrollment: (speakerId: string) =>
-      ipcRenderer.invoke("assistant:finalizeEnrollment", speakerId) as Promise<void>,
     getSnapshot: () =>
       ipcRenderer.invoke("assistant:getSnapshot") as Promise<unknown>,
-    lockSessionSpeaker: (speakerId: string, speakerLabel: string) =>
-      ipcRenderer.invoke(
-        "assistant:lockSessionSpeaker",
-        speakerId,
-        speakerLabel,
-      ) as Promise<unknown>,
     onSnapshot: (callback: (snapshot: unknown) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, snapshot: unknown) => {
         callback(snapshot);
@@ -47,28 +29,10 @@ contextBridge.exposeInMainWorld("familyHub", {
         ipcRenderer.removeListener("assistant:state", listener);
       };
     },
-    setSpeakerAllowed: (speakerId: string, allowed: boolean) =>
-      ipcRenderer.invoke(
-        "assistant:setSpeakerAllowed",
-        speakerId,
-        allowed,
-      ) as Promise<unknown>,
     startListening: () =>
       ipcRenderer.invoke("assistant:startListening") as Promise<unknown>,
     stopListening: () =>
       ipcRenderer.invoke("assistant:stopListening") as Promise<unknown>,
-    submitTranscript: (transcript: string, speakerLabel: string) =>
-      ipcRenderer.invoke(
-        "assistant:submitTranscript",
-        transcript,
-        speakerLabel,
-      ) as Promise<unknown>,
-    submitAudioChunk: (audio: Uint8Array, sampleRateHertz: number) =>
-      ipcRenderer.invoke(
-        "assistant:submitAudioChunk",
-        audio,
-        sampleRateHertz,
-      ) as Promise<unknown>,
     sendMicFrame: (frame: string) => {
       ipcRenderer.send("assistant:micFrame", frame);
     },
@@ -106,6 +70,21 @@ contextBridge.exposeInMainWorld("familyHub", {
     getReminders: () =>
       ipcRenderer.invoke("dashboard:getReminders") as Promise<unknown>,
     onReminders: makeSubscription("dashboard:reminders"),
+    getNotes: () =>
+      ipcRenderer.invoke("dashboard:getNotes") as Promise<unknown>,
+    onNotes: makeSubscription("dashboard:notes"),
+    getFocusedPanel: () =>
+      ipcRenderer.invoke("dashboard:getFocusedPanel") as Promise<unknown>,
+    onFocus: makeSubscription("dashboard:focus"),
+    getReminderList: () =>
+      ipcRenderer.invoke("dashboard:getReminderList") as Promise<unknown>,
+    onReminderList: makeSubscription("dashboard:reminderList"),
+    createNote: (input: unknown) =>
+      ipcRenderer.invoke("dashboard:createNote", input) as Promise<unknown>,
+    updateNote: (id: string, patch: unknown) =>
+      ipcRenderer.invoke("dashboard:updateNote", id, patch) as Promise<unknown>,
+    deleteNote: (id: string) =>
+      ipcRenderer.invoke("dashboard:deleteNote", id) as Promise<unknown>,
     connectCalendar: () =>
       ipcRenderer.invoke("dashboard:connectCalendar") as Promise<unknown>,
     connectReminders: () =>

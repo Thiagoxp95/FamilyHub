@@ -125,6 +125,71 @@ describe("createUpdaterController", () => {
     ]);
   });
 
+  it("auto-installs and relaunches a downloaded update after the grace delay", async () => {
+    const updater = new FakeUpdater();
+    const broadcaster = createBroadcaster();
+    createUpdaterController({
+      autoInstallOnDownloaded: true,
+      broadcaster,
+      isPackaged: true,
+      updater,
+    });
+
+    updater.emit("update-downloaded", { version: "0.1.1" });
+    // No mouse on the kitchen display, but don't yank the app out immediately.
+    expect(updater.quitAndInstall).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(60 * 1000);
+
+    // Silent install + relaunch so the display self-heals to the new version.
+    expect(updater.quitAndInstall).toHaveBeenCalledWith(true, true);
+    expect(updater.quitAndInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("schedules at most one auto-install across repeated downloaded events", async () => {
+    const updater = new FakeUpdater();
+    const broadcaster = createBroadcaster();
+    createUpdaterController({
+      autoInstallOnDownloaded: true,
+      broadcaster,
+      isPackaged: true,
+      updater,
+    });
+
+    updater.emit("update-downloaded", { version: "0.1.1" });
+    updater.emit("update-downloaded", { version: "0.1.1" });
+    await vi.advanceTimersByTimeAsync(60 * 1000);
+
+    expect(updater.quitAndInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not auto-install a downloaded update unless explicitly enabled", async () => {
+    const updater = new FakeUpdater();
+    const broadcaster = createBroadcaster();
+    createUpdaterController({ broadcaster, isPackaged: true, updater });
+
+    updater.emit("update-downloaded", { version: "0.1.1" });
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+
+    expect(updater.quitAndInstall).not.toHaveBeenCalled();
+  });
+
+  it("never auto-installs in development mode", async () => {
+    const updater = new FakeUpdater();
+    const broadcaster = createBroadcaster();
+    createUpdaterController({
+      autoInstallOnDownloaded: true,
+      broadcaster,
+      isPackaged: false,
+      updater,
+    });
+
+    updater.emit("update-downloaded", { version: "0.1.1" });
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+
+    expect(updater.quitAndInstall).not.toHaveBeenCalled();
+  });
+
   it("does not install before an update is downloaded", async () => {
     const updater = new FakeUpdater();
     const broadcaster = createBroadcaster();
@@ -359,6 +424,21 @@ describe("registerUpdaterIpc", () => {
     await handlers.get("updater:install")?.();
 
     expect(updater.checkForUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto-installs downloaded updates for the kitchen display", async () => {
+    const updater = new FakeUpdater();
+    registerUpdaterIpc({
+      appIsPackaged: true,
+      getAllWindows: () => [],
+      ipc: { handle: vi.fn() },
+      updater,
+    });
+
+    updater.emit("update-downloaded", { version: "0.1.1" });
+    await vi.advanceTimersByTimeAsync(60 * 1000);
+
+    expect(updater.quitAndInstall).toHaveBeenCalledWith(true, true);
   });
 
   it("broadcasts updater status only to non-destroyed windows", () => {

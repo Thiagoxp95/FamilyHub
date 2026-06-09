@@ -46,23 +46,26 @@ describe("parseCalendar", () => {
 });
 
 describe("parseReminders", () => {
-  it("groups items by list in first-seen order, carrying due dates", () => {
+  it("groups items by list in first-seen order, carrying ids and due dates", () => {
     const raw =
-      ["House Chores", "Buy milk", ""].join(US) +
+      ["rem-1", "House Chores", "Buy milk", ""].join(US) +
       RS +
-      ["To Buy", "Toothpaste", "2026-06-10T04:00:00"].join(US) +
+      ["rem-2", "To Buy", "Toothpaste", "2026-06-10T04:00:00"].join(US) +
       RS +
-      ["House Chores", "Call plumber", ""].join(US) +
+      ["rem-3", "House Chores", "Call plumber", ""].join(US) +
       RS;
 
     expect(parseReminders(raw)).toEqual([
       {
         name: "House Chores",
-        items: [{ title: "Buy milk" }, { title: "Call plumber" }],
+        items: [
+          { id: "rem-1", title: "Buy milk" },
+          { id: "rem-3", title: "Call plumber" },
+        ],
       },
       {
         name: "To Buy",
-        items: [{ title: "Toothpaste", due: "2026-06-10T04:00:00" }],
+        items: [{ id: "rem-2", title: "Toothpaste", due: "2026-06-10T04:00:00" }],
       },
     ]);
   });

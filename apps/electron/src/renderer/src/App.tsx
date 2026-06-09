@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { base64ToInt16, convertFloatSamplesToLinear16, int16ToBase64 } from "./audioClip";
 import { CalendarPanel } from "./CalendarPanel";
-import { FamilySetup } from "./FamilySetup";
+import { NotesPanel } from "./NotesPanel";
 import { RemindersPanel } from "./RemindersPanel";
 import { UpdateControl } from "./UpdateControl";
 import { WeatherPanel } from "./WeatherPanel";
@@ -12,14 +12,10 @@ const emptySnapshot: AssistantSnapshot = {
     googleSpeech: false,
     localListener: false,
   },
-  currentSpeakerName: null,
   events: [],
   isListening: false,
   lastAssistantResponse: null,
   lastTranscript: null,
-  lockedSpeakerLabel: null,
-  sessionExpiresAt: null,
-  speakers: [],
   wakePhrase: "Hey James",
 };
 
@@ -28,31 +24,17 @@ const captureSampleRate = 16000;
 
 export function App(): React.JSX.Element {
   const [autoStartAttempted, setAutoStartAttempted] = useState(false);
-  const [bridgeStatus, setBridgeStatus] = useState("Checking bridge...");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [micLevel, setMicLevel] = useState(0);
-  const [micStatus, setMicStatus] = useState("Requesting microphone...");
   const [snapshot, setSnapshot] = useState<AssistantSnapshot>(emptySnapshot);
-  const [showSetup, setShowSetup] = useState(false);
   const [liveMode, setLiveMode] = useState<LiveMode>("wake");
-  const [liveStatus, setLiveStatus] = useState("");
   const [liveInput, setLiveInput] = useState("");
   const [liveOutput, setLiveOutput] = useState("");
-  const [listenerState, setListenerState] = useState<
-    "loading" | "ready" | "offline" | null
-  >(null);
-  const [listenerDetail, setListenerDetail] = useState("");
-  const [listenerElapsed, setListenerElapsed] = useState(0);
-  const [localHeard, setLocalHeard] = useState("");
+  const [focusedPanel, setFocusedPanel] = useState<DashboardPanel>(null);
+  const [reminderList, setReminderList] = useState<string | null>(null);
   const micStartedRef = useRef(false);
   const playerRef = useRef<AudioPlayer | null>(null);
 
   useEffect(() => {
-    window.familyHub
-      .ping()
-      .then((response) => setBridgeStatus(`Bridge online: ${response}`))
-      .catch(() => setBridgeStatus("Bridge unavailable"));
-
     window.familyHub.assistant
       .getSnapshot()
       .then(setSnapshot)
@@ -73,12 +55,13 @@ export function App(): React.JSX.Element {
         case "mode":
           setLiveMode(event.mode);
 
-          // On "live" reset the transcript. On returning to "wake" we leave any
-          // queued audio playing so a spoken goodbye finishes naturally.
           if (event.mode === "live") {
             setLiveInput("");
             setLiveOutput("");
-            setLocalHeard("");
+          } else {
+            // Session ended (goodbye / timeout / drop) — collapse any
+            // full-screen quadrant back to the four-up grid.
+            setFocusedPanel(null);
           }
           break;
         case "inputTranscript":
@@ -88,14 +71,6 @@ export function App(): React.JSX.Element {
           setLiveOutput(event.text);
           break;
         case "status":
-          setLiveStatus(event.message);
-          break;
-        case "listener":
-          setListenerState(event.state);
-          setListenerDetail(event.detail ?? "");
-          break;
-        case "localHeard":
-          setLocalHeard(`(${event.phase}) ${event.text}`);
           break;
         case "interrupted":
           player.stop();
@@ -132,15 +107,12 @@ export function App(): React.JSX.Element {
     }
 
     micStartedRef.current = true;
+    // Mic capture must keep running (it streams frames to the wake listener), but
+    // there's no meter UI anymore — only surface a hard failure to the banner.
     const cleanup = startMicrophoneLoop({
-      onError: (message) => {
-        setMicLevel(0);
-        setMicStatus(message);
-      },
-      onLevel: setMicLevel,
-      onReady: (sampleRate) => {
-        setMicStatus(`Microphone live (${Math.round(sampleRate)} Hz)`);
-      },
+      onError: setErrorMessage,
+      onLevel: () => {},
+      onReady: () => {},
     });
 
     return () => {
@@ -149,61 +121,43 @@ export function App(): React.JSX.Element {
   }, []);
 
   useEffect(() => {
-    if (showSetup) {
-      void window.familyHub.assistant.stopListening();
-      return () => {
-        void window.familyHub.assistant.startListening();
-      };
-    }
-    return undefined;
-  }, [showSetup]);
+    window.familyHub.dashboard
+      .getFocusedPanel()
+      .then(setFocusedPanel)
+      .catch(() => undefined);
 
-  // Tick an elapsed-seconds counter while the local model is loading, so a long
-  // first-run download reads differently from a fast cached start.
+    return window.familyHub.dashboard.onFocus(setFocusedPanel);
+  }, []);
+
   useEffect(() => {
-    if (listenerState !== "loading") {
-      setListenerElapsed(0);
-      return;
+    window.familyHub.dashboard
+      .getReminderList()
+      .then(setReminderList)
+      .catch(() => undefined);
+
+    return window.familyHub.dashboard.onReminderList(setReminderList);
+  }, []);
+
+  useEffect(() => {
+    if (!focusedPanel) {
+      return undefined;
     }
 
-    const startedAt = Date.now();
-    const intervalId = window.setInterval(() => {
-      setListenerElapsed(Math.round((Date.now() - startedAt) / 1000));
-    }, 1000);
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setFocusedPanel(null);
+      }
+    };
 
-    return () => window.clearInterval(intervalId);
-  }, [listenerState]);
+    document.body.classList.add("hub-modal-open");
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.classList.remove("hub-modal-open");
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [focusedPanel]);
 
-  const listenerLabel =
-    listenerState === "ready"
-      ? 'Listener ready — say "James"'
-      : listenerState === "loading"
-        ? `Listener loading model… ${listenerElapsed}s (first run downloads ~600 MB)${
-            listenerDetail ? ` — ${lastLine(listenerDetail).slice(0, 60)}` : ""
-          }`
-        : listenerState === "offline"
-          ? "Listener offline"
-          : "Listener: waiting…";
-
-  const configuredProviderCount = [
-    snapshot.config.localListener,
-    snapshot.config.gemini,
-  ].filter(Boolean).length;
   const sessionActive = liveMode === "live";
-  const headline = !snapshot.isListening
-    ? "Voice paused"
-    : sessionActive
-      ? "Live with James"
-      : `Waiting for "${snapshot.wakePhrase}"`;
-  const sessionDetail = sessionActive
-    ? liveStatus || "Listening…"
-    : `Say "${snapshot.wakePhrase}" to start talking`;
-  const heardText = sessionActive
-    ? liveInput || "Listening…"
-    : (snapshot.lastTranscript ?? "Nothing yet");
-  const replyText = sessionActive
-    ? liveOutput || "…"
-    : (snapshot.lastAssistantResponse ?? "Ready");
 
   async function runAction(action: () => Promise<unknown>): Promise<void> {
     setErrorMessage(null);
@@ -220,235 +174,199 @@ export function App(): React.JSX.Element {
   }
 
   return (
-    <div className="kiosk">
-      <header className="voice-strip">
-        <div className={sessionActive ? "voice-orb active" : "voice-orb"} />
-        <div className="voice-strip-main">
-          <p className="eyebrow">FamilyHub Voice · {snapshot.wakePhrase}</p>
-          <h1 className="voice-headline">{headline}</h1>
-          <p className="voice-transcript">
-            {sessionActive ? replyText : sessionDetail}
-          </p>
-          {sessionActive && heardText ? (
-            <p className="voice-heard">You: {heardText}</p>
-          ) : null}
-        </div>
-        <div className="voice-strip-side">
-          <UpdateControl />
-          <MicrophoneMeter
-            active={micStatus.startsWith("Microphone live")}
-            level={micLevel}
-          />
-          {sessionActive ? (
-            <button
-              className="secondary-button"
-              onClick={() => {
-                playerRef.current?.stop();
-                void window.familyHub.assistant.endLive();
-              }}
-              type="button"
-            >
-              End conversation
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="setup-button"
-            onClick={() => setShowSetup(true)}
-          >
-            👪 Family setup
-          </button>
-        </div>
-      </header>
+    <div className={sessionActive ? "kiosk kiosk--live" : "kiosk"}>
+      {/* Seamless top-right corner: shows only when an update is actionable. */}
+      <div className="update-corner">
+        <UpdateControl />
+      </div>
+
+      {/* The voice card appears only while James is invoked, and holds the
+          conversation — no mic meter, no update button (those live elsewhere). */}
+      {sessionActive ? (
+        <header className="voice-strip voice-strip--live" aria-live="polite">
+          <div className="voice-orb active" />
+          <div className="voice-strip-main">
+            <p className="eyebrow">FamilyHub Voice · {snapshot.wakePhrase}</p>
+            <p className="voice-transcript">{liveOutput || "Listening…"}</p>
+            {liveInput ? <p className="voice-heard">You: {liveInput}</p> : null}
+          </div>
+        </header>
+      ) : null}
 
       {errorMessage ? <div className="error-banner">{errorMessage}</div> : null}
 
       <main className="quad-grid">
         <section className="quad quad--calendar">
-          <header className="quad-head">
-            <h2>Calendar</h2>
-            <span>Today</span>
-          </header>
+          <PanelHeader
+            accessory="Today"
+            onExpand={() => setFocusedPanel("calendar")}
+            title="Calendar"
+          />
           <div className="quad-body">
             <CalendarPanel />
           </div>
         </section>
 
         <section className="quad quad--weather">
+          <button
+            aria-label="Expand weather"
+            className="quad-expand quad-expand--floating"
+            onClick={() => setFocusedPanel("weather")}
+            title="Expand weather"
+            type="button"
+          >
+            ⛶
+          </button>
           <WeatherPanel />
         </section>
 
         <section className="quad quad--reminders">
-          <header className="quad-head">
-            <h2>Reminders</h2>
-          </header>
+          <PanelHeader
+            onExpand={() => setFocusedPanel("reminders")}
+            title="Reminders"
+          />
           <div className="quad-body">
-            <RemindersPanel />
+            <RemindersPanel focusList={reminderList} />
           </div>
         </section>
 
-        <section className="quad quad--empty">
-          <div className="quad-body quad-body--empty" />
+        <section className="quad quad--notes">
+          <PanelHeader
+            onExpand={() => setFocusedPanel("notes")}
+            title="Notes"
+          />
+          <div className="quad-body">
+            <NotesPanel />
+          </div>
         </section>
       </main>
 
-      <details className="diag">
-        <summary>Diagnostics</summary>
-        <div className="diag-body">
-          <div className="diag-providers">
-            <p className="section-label">Providers · {configuredProviderCount}/2</p>
-            <ProviderRow
-              configured={snapshot.config.localListener}
-              name="Local listener (Parakeet)"
-            />
-            <ProviderRow
-              configured={snapshot.config.gemini}
-              name="Gemini Live (conversation)"
-            />
-            <div className="bridge-row">
-              <StatusDot active={bridgeStatus.includes("online")} />
-              <span>{bridgeStatus}</span>
-            </div>
-            <div className="bridge-row">
-              <StatusDot active={micStatus.startsWith("Microphone live")} />
-              <span>{micStatus}</span>
-            </div>
-            <div className="bridge-row">
-              <StatusDot active={listenerState === "ready"} />
-              <span>{listenerLabel}</span>
-            </div>
-            {localHeard ? (
-              <div className="bridge-row">
-                <StatusDot active={false} />
-                <span>Heard locally: {localHeard.slice(0, 80)}</span>
-              </div>
-            ) : null}
-          </div>
-          <div className="control-row">
-            <button
-              disabled={snapshot.isListening}
-              onClick={() =>
-                void runAction(() => window.familyHub.assistant.startListening())
-              }
-              type="button"
-            >
-              Start
-            </button>
-            <button
-              className="secondary-button"
-              disabled={!snapshot.isListening}
-              onClick={() =>
-                void runAction(() => window.familyHub.assistant.stopListening())
-              }
-              type="button"
-            >
-              Stop
-            </button>
-          </div>
-          {snapshot.events.length > 0 ? (
-            <ol className="event-list">
-              {snapshot.events.map((event) => (
-                <li
-                  className={`event-item ${event.type}`}
-                  key={`${event.at}-${event.message}`}
-                >
-                  <span>{formatEventTime(event.at)}</span>
-                  <p>{event.message}</p>
-                </li>
-              ))}
-            </ol>
-          ) : null}
-        </div>
-      </details>
-
-      {showSetup && (
-        <div className="setup-overlay">
-          <FamilySetup
-            speakers={snapshot.speakers}
-            onClose={() => setShowSetup(false)}
-          />
-        </div>
-      )}
+      {focusedPanel ? (
+        <FullscreenPanel
+          panel={focusedPanel}
+          reminderList={reminderList}
+          onClose={() => setFocusedPanel(null)}
+        />
+      ) : null}
     </div>
   );
 }
 
-function ProviderRow({
-  configured,
-  name,
+function PanelHeader({
+  accessory,
+  onExpand,
+  title,
 }: {
-  configured: boolean;
-  name: string;
+  accessory?: string;
+  onExpand: () => void;
+  title: string;
 }): React.JSX.Element {
   return (
-    <div className="provider-row">
-      <StatusDot active={configured} />
-      <span>{name}</span>
-      <strong>{configured ? "Ready" : "Missing"}</strong>
-    </div>
+    <header className="quad-head">
+      <h2>{title}</h2>
+      <div className="quad-head-actions">
+        {accessory ? <span>{accessory}</span> : null}
+        <button
+          aria-label={`Expand ${title.toLowerCase()}`}
+          className="quad-expand"
+          onClick={onExpand}
+          title={`Expand ${title.toLowerCase()}`}
+          type="button"
+        >
+          ⛶
+        </button>
+      </div>
+    </header>
   );
 }
 
-function StatusDot({ active }: { active: boolean }): React.JSX.Element {
-  return <span className={active ? "status-dot active" : "status-dot"} />;
-}
-
-function MicrophoneMeter({
-  active,
-  level,
+function FullscreenPanel({
+  onClose,
+  panel,
+  reminderList,
 }: {
-  active: boolean;
-  level: number;
+  onClose: () => void;
+  panel: Exclude<DashboardPanel, null>;
+  reminderList?: string | null;
 }): React.JSX.Element {
-  const displayLevel = active ? level : 0;
+  const title = panelTitle(panel);
 
   return (
     <div
-      aria-label={`Microphone input level ${displayLevel}%`}
-      className="mic-meter"
-      role="meter"
-      aria-valuemax={100}
-      aria-valuemin={0}
-      aria-valuenow={displayLevel}
+      className={`hub-fullscreen-backdrop ${panel}-fullscreen`}
+      onClick={onClose}
+      role="presentation"
     >
-      <span>Input</span>
-      <div className="mic-meter-track">
-        <div
-          className="mic-meter-fill"
-          style={{ inlineSize: `${displayLevel}%` }}
-        />
-      </div>
-      <strong>{displayLevel}%</strong>
+      <section
+        aria-label={`${title} expanded`}
+        aria-modal="true"
+        className={`hub-fullscreen-panel ${panel}-expanded`}
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <button
+          aria-label={`Close ${title.toLowerCase()}`}
+          className="hub-fullscreen-close"
+          onClick={onClose}
+          title="Close"
+          type="button"
+        >
+          ×
+        </button>
+        <header className="fullscreen-head">
+          <p>{title}</p>
+          <h2>{fullscreenHeadline(panel)}</h2>
+        </header>
+        <div className="fullscreen-body">
+          {panel === "calendar" ? <CalendarPanel /> : null}
+          {panel === "weather" ? <WeatherPanel variant="expanded" /> : null}
+          {panel === "reminders" ? (
+            <RemindersPanel focusList={reminderList ?? null} />
+          ) : null}
+          {panel === "notes" ? <NotesPanel variant="expanded" /> : null}
+        </div>
+      </section>
     </div>
   );
+}
+
+function panelTitle(panel: Exclude<DashboardPanel, null>): string {
+  switch (panel) {
+    case "calendar":
+      return "Calendar";
+    case "weather":
+      return "Weather";
+    case "reminders":
+      return "Reminders";
+    case "notes":
+      return "Notes";
+  }
+}
+
+function fullscreenHeadline(panel: Exclude<DashboardPanel, null>): string {
+  switch (panel) {
+    case "calendar":
+      return "Family agenda";
+    case "weather":
+      return "Current conditions";
+    case "reminders":
+      return "Open tasks";
+    case "notes":
+      return "Family board";
+  }
 }
 
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unexpected assistant error.";
 }
 
-// Sidecar stderr can arrive as multi-line chunks (e.g. a progress bar); show the
-// most recent non-empty line so the loading detail stays compact.
-function lastLine(text: string): string {
-  const lines = text.split(/[\r\n]+/).filter((line) => line.trim().length > 0);
-  return lines.at(-1) ?? text;
-}
-
 function isAssistantSnapshot(value: unknown): value is AssistantSnapshot {
   return (
     typeof value === "object" &&
     value !== null &&
-    "speakers" in value &&
-    "events" in value
+    "events" in value &&
+    "isListening" in value
   );
-}
-
-function formatEventTime(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(new Date(value));
 }
 
 async function startMicrophoneLoop({
