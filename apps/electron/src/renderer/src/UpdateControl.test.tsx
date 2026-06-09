@@ -36,6 +36,19 @@ describe("badgeContent", () => {
     });
   });
 
+  it("shows the running version with a spinner glyph while checking", () => {
+    expect(badgeContent({ state: "checking" }, "1.2.3")).toMatchObject({
+      version: "v1.2.3",
+      glyph: "⟳",
+    });
+  });
+
+  it("shows the target version with a download glyph when available", () => {
+    expect(
+      badgeContent({ state: "available", version: "1.4.0" }, "1.2.3"),
+    ).toMatchObject({ version: "v1.4.0", glyph: "↓" });
+  });
+
   it("shows the target version and percent while downloading", () => {
     expect(
       badgeContent({ state: "downloading", version: "1.4.0", percent: 42 }, "1.2.3"),
@@ -68,6 +81,7 @@ describe("UpdateControlView", () => {
 
     expect(html).toContain("v1.2.3");
     expect(html).toContain("✓");
+    expect(html).toContain('aria-label="Up to date — check for updates"');
   });
 
   it("renders the download percent while downloading", () => {

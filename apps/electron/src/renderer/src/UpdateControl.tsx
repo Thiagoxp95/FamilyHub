@@ -24,7 +24,10 @@ export function badgeContent(
   appVersion: string,
 ): { version: string; glyph: string; label: string; percent?: number } {
   const tag = (raw: string): string => (raw ? `v${raw}` : "");
-  const target = tag(status.version ?? appVersion);
+  // Once an update is in play we show *its* version. If the backend hasn't
+  // supplied one yet, show no version rather than the running one next to a
+  // download/restart glyph (which would read as "current version downloading").
+  const target = tag(status.version ?? "");
 
   switch (status.state) {
     case "checking":
@@ -36,7 +39,7 @@ export function badgeContent(
         version: target,
         glyph: "↓",
         label: "Downloading update",
-        percent: status.percent ?? 0,
+        percent: status.percent,
       };
     case "downloaded":
       return { version: target, glyph: "↻", label: "Update ready — restart" };
