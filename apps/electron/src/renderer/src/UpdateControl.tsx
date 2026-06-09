@@ -1,10 +1,74 @@
 import { useEffect, useState } from "react";
 
+// Which action a click on the badge performs. Passive states have none.
+export function badgeAction(state: UpdateState): "check" | "install" | null {
+  switch (state) {
+    case "idle":
+    case "not-available":
+    case "error":
+      return "check";
+    case "downloaded":
+      return "install";
+    case "checking":
+    case "available":
+    case "downloading":
+      return null;
+  }
+}
+
+// The version text, trailing glyph, label, and optional percent the badge shows.
+// At rest the badge shows the running app version; once an update is known it
+// shows that update's target version.
+export function badgeContent(
+  status: UpdaterStatus,
+  appVersion: string,
+): { version: string; glyph: string; label: string; percent?: number } {
+  const tag = (raw: string): string => (raw ? `v${raw}` : "");
+  const target = tag(status.version ?? appVersion);
+
+  switch (status.state) {
+    case "checking":
+      return { version: tag(appVersion), glyph: "⟳", label: "Checking for updates…" };
+    case "available":
+      return { version: target, glyph: "↓", label: "Update available" };
+    case "downloading":
+      return {
+        version: target,
+        glyph: "↓",
+        label: "Downloading update",
+        percent: status.percent ?? 0,
+      };
+    case "downloaded":
+      return { version: target, glyph: "↻", label: "Update ready — restart" };
+    case "error":
+      return { version: tag(appVersion), glyph: "!", label: "Update failed — retry" };
+    case "idle":
+    case "not-available":
+      return {
+        version: tag(appVersion),
+        glyph: "✓",
+        label: "Up to date — check for updates",
+      };
+  }
+}
+
 export function UpdateControl(): React.JSX.Element {
   const [status, setStatus] = useState<UpdaterStatus>({ state: "idle" });
+  const [appVersion, setAppVersion] = useState("");
 
   useEffect(() => {
     let mounted = true;
+
+    window.familyHub
+      .getVersion()
+      .then((version) => {
+        if (mounted) {
+          setAppVersion(version);
+        }
+      })
+      .catch(() => {
+        // Version is non-critical chrome; leave it blank if unavailable.
+      });
 
     window.familyHub.updater
       .getStatus()
@@ -14,8 +78,8 @@ export function UpdateControl(): React.JSX.Element {
         }
       })
       .catch(() => {
-        // Backend not reachable (e.g. auto-updater disabled) — stay hidden and
-        // seamless rather than showing a red error in the header.
+        // Backend not reachable (e.g. auto-updater disabled) — stay at idle so
+        // the badge shows "up to date" rather than an error.
         if (mounted) {
           setStatus({ state: "idle" });
         }
@@ -36,10 +100,14 @@ export function UpdateControl(): React.JSX.Element {
   return (
     <UpdateControlView
       status={status}
+      appVersion={appVersion}
       onCheck={() => {
-        void window.familyHub.updater.check().then(setStatus).catch(() => {
-          setStatus({ state: "error", error: "Unable to check for updates." });
-        });
+        void window.familyHub.updater
+          .check()
+          .then(setStatus)
+          .catch(() => {
+            setStatus({ state: "error", error: "Unable to check for updates." });
+          });
       }}
       onInstall={() => {
         void window.familyHub.updater.install();
@@ -50,62 +118,49 @@ export function UpdateControl(): React.JSX.Element {
 
 export function UpdateControlView({
   status,
+  appVersion,
   onCheck,
   onInstall,
 }: {
+  appVersion: string;
   onCheck: () => void;
   onInstall: () => void;
   status: UpdaterStatus;
-}): React.JSX.Element | null {
-  switch (status.state) {
-    case "available":
-      return (
-        <div className="update-control" role="status">
-          <span>
-            {status.version ? `${status.version} available` : "Update available"}
-          </span>
-          <span>Downloading...</span>
-        </div>
-      );
-    case "checking":
-      return (
-        <div className="update-control" role="status">
-          <span>Checking updates...</span>
-        </div>
-      );
-    case "downloading":
-      return (
-        <div className="update-control" role="status">
-          <span>Downloading {status.percent ?? 0}%</span>
-        </div>
-      );
-    case "downloaded":
-      return (
-        <div className="update-control update-control--ready" role="status">
-          <span>{status.version ? `${status.version} ready` : "Update ready"}</span>
-          <button className="secondary-button" onClick={onInstall} type="button">
-            Restart
-          </button>
-        </div>
-      );
-    case "error":
-      return (
-        <div className="update-control update-control--error" role="status">
-          <span>{status.error ?? "Update failed."}</span>
-          <button className="secondary-button" onClick={onCheck} type="button">
-            Retry
-          </button>
-        </div>
-      );
-    case "idle":
-    case "not-available":
-      return (
-        <div className="update-control" role="status">
-          {status.state === "not-available" ? <span>Up to date</span> : null}
-          <button className="secondary-button" onClick={onCheck} type="button">
-            Check for updates
-          </button>
-        </div>
-      );
-  }
+}): React.JSX.Element {
+  const action = badgeAction(status.state);
+  const { version, glyph, label, percent } = badgeContent(status, appVersion);
+  const spinning = status.state === "checking";
+  const ready = status.state === "downloaded";
+
+  return (
+    <button
+      type="button"
+      className={ready ? "version-badge version-badge--ready" : "version-badge"}
+      aria-label={label}
+      title={label}
+      disabled={action === null}
+      onClick={() => {
+        if (action === "check") {
+          onCheck();
+        } else if (action === "install") {
+          onInstall();
+        }
+      }}
+    >
+      {version ? <span className="version-badge__version">{version}</span> : null}
+      <span
+        aria-hidden="true"
+        className={
+          spinning
+            ? "version-badge__glyph version-badge__glyph--spin"
+            : "version-badge__glyph"
+        }
+      >
+        {glyph}
+      </span>
+      {percent !== undefined ? (
+        <span className="version-badge__percent">{percent}%</span>
+      ) : null}
+    </button>
+  );
 }
