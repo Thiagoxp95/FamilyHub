@@ -250,6 +250,117 @@ describe("LiveController", () => {
     await vi.waitFor(() => expect(session?.closed).toBe(true));
   });
 
+  it("keeps the session alive while a slow computer task runs even if a sibling tool finishes first", async () => {
+    const transcriber = new FakeTranscriber();
+    const sessions: FakeSession[] = [];
+    const sink = createSink();
+    let releaseComputer: () => void = () => {};
+    const runTool = vi.fn(async (name: string) => {
+      if (name === "run_computer_task") {
+        await new Promise<void>((resolve) => {
+          releaseComputer = resolve;
+        });
+      }
+      return { ok: true };
+    });
+    const controller = new LiveController({
+      createTranscriber: () => transcriber,
+      createSession: () => {
+        const session = new FakeSession();
+        sessions.push(session);
+        return session;
+      },
+      runTool,
+      sink,
+      idleTimeoutMs: 120,
+    });
+    await controller.start();
+
+    transcriber.emit("hey james open safari");
+    await vi.waitFor(() => expect(sessions).toHaveLength(1));
+    const session = sessions[0];
+
+    // Gemini fires the long computer task AND a quick sibling in the same turn.
+    session?.handlers?.onEvent({
+      kind: "toolCall",
+      id: "c1",
+      name: "run_computer_task",
+      args: { task: "open Safari" },
+    });
+    session?.handlers?.onEvent({
+      kind: "toolCall",
+      id: "r1",
+      name: "list_reminders",
+      args: {},
+    });
+
+    // The quick sibling resolves immediately; it MUST NOT re-arm the idle timer
+    // and kill the still-running computer task.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(session?.closed).toBe(false);
+
+    // Once the computer task finishes, the idle countdown resumes and closes.
+    releaseComputer();
+    await vi.waitFor(() => expect(session?.closed).toBe(true));
+  });
+
+  it("suppresses a reflexive tile zoom while a computer task is in flight", async () => {
+    const transcriber = new FakeTranscriber();
+    const sessions: FakeSession[] = [];
+    const sink = createSink();
+    let releaseComputer: () => void = () => {};
+    const runTool = vi.fn(async (name: string) => {
+      if (name === "run_computer_task") {
+        await new Promise<void>((resolve) => {
+          releaseComputer = resolve;
+        });
+      }
+      return { ok: true };
+    });
+    const controller = new LiveController({
+      createTranscriber: () => transcriber,
+      createSession: () => {
+        const session = new FakeSession();
+        sessions.push(session);
+        return session;
+      },
+      runTool,
+      sink,
+      idleTimeoutMs: 5_000,
+    });
+    await controller.start();
+
+    transcriber.emit("hey james open safari");
+    await vi.waitFor(() => expect(sessions).toHaveLength(1));
+    const session = sessions[0];
+
+    session?.handlers?.onEvent({
+      kind: "toolCall",
+      id: "c1",
+      name: "run_computer_task",
+      args: { task: "open Safari" },
+    });
+    session?.handlers?.onEvent({
+      kind: "toolCall",
+      id: "z1",
+      name: "show_calendar_card",
+      args: {},
+    });
+
+    await vi.waitFor(() => expect(runTool).toHaveBeenCalled());
+    // The zoom must be dropped — runTool is invoked for the computer task only,
+    // never for the show_*_card — but Gemini still gets a response for it.
+    expect(runTool).toHaveBeenCalledTimes(1);
+    expect(runTool).toHaveBeenCalledWith("run_computer_task", {
+      task: "open Safari",
+    });
+    expect(session?.toolResponses.map((r) => r.name)).toContain(
+      "show_calendar_card",
+    );
+
+    releaseComputer();
+  });
+
   it("resets dashboard focus when the session ends (collapses full-screen quadrants)", async () => {
     const transcriber = new FakeTranscriber();
     const sessions: FakeSession[] = [];

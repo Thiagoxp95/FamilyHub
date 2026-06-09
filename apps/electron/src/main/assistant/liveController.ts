@@ -12,11 +12,23 @@ import {
   type ListenerState,
 } from "./listenerMachine";
 import {
+  computerToolName,
+  dashboardToolNames,
   endConversationToolName,
   type LiveEvent,
   type LiveSessionHandlers,
 } from "./liveSession";
 import type { LocalTranscriber } from "./localTranscriber";
+
+// The "zoom a quadrant to full screen" tool calls. While a computer-control task
+// owns the screen, Gemini sometimes reflexively fires one of these (usually
+// show_calendar_card) in the same turn; we drop them so the dashboard stays put.
+const dashboardShowToolNames = new Set<string>([
+  dashboardToolNames.showCalendar,
+  dashboardToolNames.showWeather,
+  dashboardToolNames.showReminders,
+  dashboardToolNames.showNotes,
+]);
 
 // The subset of GeminiLiveSession the controller depends on (so tests can fake
 // it without a websocket).
@@ -127,6 +139,13 @@ export class LiveController {
   private session: LiveSessionLike | null = null;
   private state: ListenerState = createListenerState();
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  // Tool calls still running. The idle countdown only re-arms once this hits 0,
+  // so a quick tool finishing can't kill the session while a slow one (e.g. a
+  // 180s computer task) is still in flight.
+  private inFlightToolCount = 0;
+  // Computer-control tasks specifically in flight — while > 0 we suppress tile
+  // zoom tool calls so "open an app" doesn't full-screen the calendar quadrant.
+  private computerTasksInFlight = 0;
   private finalized = true;
   private inputTurnBuffer = "";
   private outputTurnBuffer = "";
@@ -264,6 +283,8 @@ export class LiveController {
     this.session = session;
     this.finalized = false;
     this.pendingReason = null;
+    this.inFlightToolCount = 0;
+    this.computerTasksInFlight = 0;
     this.inputTurnBuffer = "";
     this.outputTurnBuffer = "";
     this.sink.sendLive({ type: "status", message: "Connecting…" });
@@ -398,11 +419,20 @@ export class LiveController {
               : "said goodbye";
           this.apply({ type: "stop" });
           return;
+        } else if (
+          dashboardShowToolNames.has(event.name) &&
+          this.computerTasksInFlight > 0
+        ) {
+          // A computer-control task owns the screen right now. Drop the reflexive
+          // tile zoom (the user wants the dashboard left alone during computer
+          // use), but still acknowledge it so Gemini's turn isn't left hanging.
+          this.session?.sendToolResponse(event.id, event.name, { ok: true });
         } else {
-          // Calendar/Reminders tool — run it and return the result to Gemini.
-          // Pause the idle timer while the tool runs: a slow AppleScript (e.g.
-          // completing a reminder) is legitimate work, not silence, and must not
-          // trip the timeout mid-call. runToolCall re-arms it once it responds.
+          // Calendar/Reminders/computer tool — run it and return the result to
+          // Gemini. Pause the idle timer while any tool runs: a slow AppleScript
+          // (completing a reminder) or a 180s computer task is legitimate work,
+          // not silence, and must not trip the timeout mid-call. runToolCall
+          // re-arms the timer once every in-flight tool has responded.
           this.clearIdleTimer();
           void this.runToolCall(event.id, event.name, event.args);
         }
@@ -443,11 +473,28 @@ export class LiveController {
       return;
     }
 
+    // Count this tool as in flight (synchronously, before the first await) so a
+    // sibling tool dispatched in the same turn sees it and doesn't re-arm the
+    // idle timer out from under it.
+    this.inFlightToolCount += 1;
+    const isComputerTask = name === computerToolName;
+    if (isComputerTask) {
+      this.computerTasksInFlight += 1;
+      // Collapse any quadrant a sibling show_*_card zoomed before this ran, so a
+      // computer task always leaves the dashboard in its normal grid.
+      this.resetDashboardFocus?.();
+    }
+
     let result: Record<string, unknown>;
     try {
       result = await this.runTool(name, args);
     } catch (error) {
       result = { ok: false, error: readErrorMessage(error) };
+    } finally {
+      this.inFlightToolCount = Math.max(0, this.inFlightToolCount - 1);
+      if (isComputerTask) {
+        this.computerTasksInFlight = Math.max(0, this.computerTasksInFlight - 1);
+      }
     }
 
     // Surface the tool call + outcome in the activity log for debugging.
@@ -457,8 +504,9 @@ export class LiveController {
     this.session?.sendToolResponse(id, name, result);
     this.sink.emitSnapshot();
 
-    // Resume the idle countdown now that the model has its result and can reply.
-    if (!this.finalized) {
+    // Resume the idle countdown only once every in-flight tool has responded, so
+    // a quick tool can't kill the session while a slow one is still running.
+    if (!this.finalized && this.inFlightToolCount === 0) {
       this.armIdleTimer();
     }
   }
