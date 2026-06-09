@@ -7,6 +7,7 @@ import {
   computerToolName,
   dashboardToolNames,
   noteToolNames,
+  updaterToolNames,
   weatherToolName,
 } from "./liveSession";
 import { runComputerTask } from "./computerControl";
@@ -26,6 +27,7 @@ import { AssistantService } from "./service";
 import type { AssistantSnapshot } from "./types";
 import type { AgentReminder } from "./calendarTools";
 import type { DashboardController, DashboardPanel } from "../dashboard/ipc";
+import type { UpdaterController } from "../updater";
 import type { ReminderList } from "../dashboard/eventkit";
 import {
   isNoteColor,
@@ -37,7 +39,10 @@ const assistantStateChannel = "assistant:state";
 const liveStateChannel = "assistant:live";
 const liveAudioChannel = "assistant:liveAudio";
 
-export function registerAssistantIpc(dashboard?: DashboardController): void {
+export function registerAssistantIpc(
+  dashboard?: DashboardController,
+  updater?: UpdaterController,
+): void {
   const geminiApiKey =
     process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? process.env.GOOGLE_API;
   const sidecarPython = resolveSidecarPython();
@@ -267,6 +272,27 @@ export function registerAssistantIpc(dashboard?: DashboardController): void {
         return result.ok
           ? { ok: true, output: result.output ?? "Done." }
           : { ok: false, error: result.error ?? "Computer task failed." };
+      }
+      case updaterToolNames.checkForUpdates: {
+        if (!updater) {
+          return { ok: false, error: "Updater unavailable." };
+        }
+        const result = await updater.checkNow();
+        return { ok: true, ...result };
+      }
+      case updaterToolNames.downloadUpdate: {
+        if (!updater) {
+          return { ok: false, error: "Updater unavailable." };
+        }
+        const result = await updater.downloadNow();
+        return { ok: true, ...result };
+      }
+      case updaterToolNames.installUpdate: {
+        if (!updater) {
+          return { ok: false, error: "Updater unavailable." };
+        }
+        const result = await updater.installNow();
+        return { ok: true, ...result };
       }
       default:
         return { ok: false, error: `Unknown tool: ${name}` };

@@ -63,8 +63,8 @@ app.whenReady().then(async () => {
   ipcMain.handle("app:ping", () => "pong");
   ipcMain.handle("app:getVersion", () => app.getVersion());
   const dashboard = registerDashboardIpc(app.getPath("userData"));
-  registerAssistantIpc(dashboard);
   const updater = registerUpdaterIpc({ appIsPackaged: app.isPackaged });
+  registerAssistantIpc(dashboard, updater);
   void updater.start();
   createMainWindow();
 
