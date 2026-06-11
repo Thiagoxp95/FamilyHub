@@ -107,6 +107,31 @@ describe("LiveController", () => {
     expect(sessions[0]?.sentFrames).toEqual(["l1", "l2"]);
   });
 
+  it("acknowledges the wake with connecting mode before the session opens", async () => {
+    const { transcriber, sink } = await setup();
+
+    transcriber.emit("hey james hello");
+
+    // "connecting" must be emitted synchronously on wake — it's the user's
+    // immediate feedback — while "live" only lands after the async connect.
+    expect(sink.live).toContainEqual({ type: "mode", mode: "connecting" });
+    expect(sink.live).not.toContainEqual({ type: "mode", mode: "live" });
+
+    await vi.waitFor(() =>
+      expect(sink.live).toContainEqual({ type: "mode", mode: "live" }),
+    );
+
+    const modes = sink.live
+      .filter(
+        (event): event is { type: "mode"; mode: string } =>
+          typeof event === "object" &&
+          event !== null &&
+          (event as { type?: string }).type === "mode",
+      )
+      .map((event) => event.mode);
+    expect(modes.indexOf("connecting")).toBeLessThan(modes.indexOf("live"));
+  });
+
   it("feeds every frame to the transcriber and resets it on start", async () => {
     const { controller, transcriber } = await setup();
     expect(transcriber.resets).toBe(1); // reset on start

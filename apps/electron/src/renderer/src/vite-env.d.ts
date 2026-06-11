@@ -21,7 +21,7 @@ interface AssistantSnapshot {
   wakePhrase: string;
 }
 
-type LiveMode = "wake" | "live";
+type LiveMode = "wake" | "connecting" | "live";
 
 type LiveStateEvent =
   | { type: "mode"; mode: LiveMode }

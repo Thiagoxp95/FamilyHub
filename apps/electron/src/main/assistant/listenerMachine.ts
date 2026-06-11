@@ -41,12 +41,12 @@ export interface ListenerConfig {
   bufferAcrossConnect: boolean;
 }
 
-// At the renderer's ~120 ms frame cadence, 24 frames ≈ 3 s of pre-roll and
-// 250 frames ≈ 30 s of buffered audio across a slow connect (only used when
+// At the renderer's ~60 ms frame cadence, 48 frames ≈ 3 s of pre-roll and
+// 500 frames ≈ 30 s of buffered audio across a slow connect (only used when
 // bufferAcrossConnect is enabled).
 export const defaultListenerConfig: ListenerConfig = {
-  maxPrerollFrames: 24,
-  maxQueueFrames: 250,
+  maxPrerollFrames: 48,
+  maxQueueFrames: 500,
   bufferAcrossConnect: false,
 };
 

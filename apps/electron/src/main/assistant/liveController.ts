@@ -44,7 +44,7 @@ export interface LiveSessionLike {
 }
 
 export type LiveStateEvent =
-  | { type: "mode"; mode: "wake" | "live" }
+  | { type: "mode"; mode: "wake" | "connecting" | "live" }
   | { type: "inputTranscript"; text: string }
   | { type: "outputTranscript"; text: string }
   | { type: "status"; message: string }
@@ -287,6 +287,11 @@ export class LiveController {
     this.computerTasksInFlight = 0;
     this.inputTurnBuffer = "";
     this.outputTurnBuffer = "";
+    // Acknowledge the wake IMMEDIATELY, before the Gemini connect (median
+    // ~400 ms, tail 1.4–2.5 s). The renderer shows the voice strip on
+    // "connecting", so the user sees the wake land the moment it fires instead
+    // of staring at a silent dashboard until the websocket opens.
+    this.sink.sendLive({ type: "mode", mode: "connecting" });
     this.sink.sendLive({ type: "status", message: "Connecting…" });
 
     debug("connecting to Gemini Live…");

@@ -55,7 +55,7 @@ export function App(): React.JSX.Element {
         case "mode":
           setLiveMode(event.mode);
 
-          if (event.mode === "live") {
+          if (event.mode === "connecting" || event.mode === "live") {
             setLiveInput("");
             setLiveOutput("");
           } else {
@@ -157,7 +157,9 @@ export function App(): React.JSX.Element {
     };
   }, [focusedPanel]);
 
-  const sessionActive = liveMode === "live";
+  // The strip shows from the instant the wake fires ("connecting") so the user
+  // gets immediate feedback instead of waiting out the Gemini connect.
+  const sessionActive = liveMode !== "wake";
 
   async function runAction(action: () => Promise<unknown>): Promise<void> {
     setErrorMessage(null);
@@ -187,7 +189,10 @@ export function App(): React.JSX.Element {
           <div className="voice-orb active" />
           <div className="voice-strip-main">
             <p className="eyebrow">FamilyHub Voice · {snapshot.wakePhrase}</p>
-            <p className="voice-transcript">{liveOutput || "Listening…"}</p>
+            <p className="voice-transcript">
+              {liveOutput ||
+                (liveMode === "connecting" ? "Waking…" : "Listening…")}
+            </p>
             {liveInput ? <p className="voice-heard">You: {liveInput}</p> : null}
           </div>
         </header>
@@ -398,7 +403,10 @@ async function startMicrophoneLoop({
       sampleRate: captureSampleRate,
     });
     const source = audioContext.createMediaStreamSource(stream);
-    const processor = audioContext.createScriptProcessor(4096, 1, 1);
+    // 1024 samples @ 16 kHz = 64 ms callbacks. The previous 4096 (256 ms)
+    // buffer added ~190 ms average delay before audio even reached the wake
+    // sidecar — a big slice of the perceived wake latency.
+    const processor = audioContext.createScriptProcessor(1024, 1, 1);
     const mutedOutput = audioContext.createGain();
     let pendingSamples: number[] = [];
     let smoothedLevel = 0;
@@ -431,7 +439,7 @@ async function startMicrophoneLoop({
       pendingSamples = [];
       const pcm = convertFloatSamplesToLinear16(samples);
       window.familyHub.assistant.sendMicFrame(int16ToBase64(pcm));
-    }, 120);
+    }, 60);
 
     onReady(audioContext.sampleRate);
 
