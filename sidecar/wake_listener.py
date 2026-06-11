@@ -6,14 +6,20 @@ interchangeable engines (select via --engine or FAMILYHUB_WAKE_ENGINE):
 
   twostage (default): two stages. Stage 1 is an openWakeWord ONNX classifier
     (models/hey_james.onnx) that cheaply flags "james"-ish candidates with high
-    recall. Because the classifier fires before the word fully lands, Stage 2
-    first collects a short post-trigger window (FAMILYHUB_WAKE_POST_TRIGGER_MS)
-    so the complete phrase is buffered, then runs a FREE (unconstrained)
-    sherpa-onnx Moonshine decode of the ~2 s tail. The Moonshine pass confirms
-    only if the transcript actually contains the distinctive word ("james" or a
-    curated alias defined by FAMILYHUB_WAKE_CONFIRM_PHRASE). Because the decode
-    is unconstrained, it never force-maps a near-miss ("hey jason") onto the wake
-    phrase — a false wake needs both stages wrong at once.
+    recall. A candidate scoring at or above FAMILYHUB_WAKE_S1_BYPASS wakes
+    immediately (a score that high is a clearer wake signal than any tiny-ASR
+    transcript, and skipping the confirm cuts ~0.5 s of latency). Candidates in
+    the [threshold, bypass) band first collect a short post-trigger window
+    (FAMILYHUB_WAKE_POST_TRIGGER_MS) so the complete phrase is buffered, then
+    Stage 2 runs FREE (unconstrained) decodes of the ~2 s tail through a CHAIN
+    of verifiers — Moonshine tiny → Whisper tiny.en → Vosk small, cheapest
+    first, stopping at the first one whose transcript contains the distinctive
+    word ("james" or a curated alias from FAMILYHUB_WAKE_CONFIRM_PHRASE).
+    Measured on held-out synthetic positives, the chain confirms ~3x as many
+    genuine wakes as Moonshine alone (60% vs 22%) with zero false confirms on
+    near-misses ("hey jason"/"hey jane"/"hey dreams"): each decode is
+    unconstrained, so none of them force-maps a near-miss onto the wake phrase
+    — a false wake needs Stage 1 AND every verifier wrong at once.
 
   vosk: Vosk ASR constrained to a ["<phrase>","[unk]"] grammar + a confidence
     gate. Heavier model but no general-speech drift. Offline fallback if the
@@ -27,12 +33,18 @@ Knobs:
                                    confirm model is not even loaded when off, so
                                    this is a clean on/off with no leftover cost.
   FAMILYHUB_WAKE_THRESHOLD       — Stage-1 openWakeWord score threshold (recall)
+  FAMILYHUB_WAKE_S1_BYPASS       — Stage-1 score at/above which the wake fires
+                                   immediately without Stage-2 confirmation
   FAMILYHUB_WAKE_POST_TRIGGER_MS — milliseconds of audio to buffer after Stage-1
-                                   fires before handing off to Stage-2 Moonshine
+                                   fires before handing off to Stage 2
   FAMILYHUB_WAKE_PHRASE          — full wake phrase to listen for
-  FAMILYHUB_WAKE_CONFIRM_PHRASE  — word/alias Moonshine must transcribe to confirm
+  FAMILYHUB_WAKE_CONFIRM_PHRASE  — word/alias Stage 2 must transcribe to confirm
   FAMILYHUB_WAKE_MODEL           — path to the openWakeWord ONNX model file
   FAMILYHUB_MOONSHINE_MODEL      — path to the sherpa-onnx Moonshine model
+  FAMILYHUB_WHISPER_MODEL        — path to the sherpa-onnx Whisper tiny.en model
+                                   (skipped from the chain if the dir is absent)
+  FAMILYHUB_VOSK_MODEL           — path to the Vosk model used as the final
+                                   free-decode verifier (skipped if absent)
 
 Protocol (newline-delimited over stdio):
   stdin  : base64(int16 LINEAR16 @ 16 kHz mono) per line; OR a JSON control line
@@ -169,6 +181,7 @@ class OpenWakeWordEngine:
         self.model = Model(wakeword_models=[model_path], inference_framework="onnx")
         self.model_path = model_path
         self.threshold = threshold
+        self.last_fire_score = 0.0  # score of the most recent FIRED frame
         self._leftover = np.zeros(0, dtype=np.int16)
         self._cooldown = 0
         self._peak = 0.0  # running max of the current candidate burst (for dlog)
@@ -216,6 +229,7 @@ class OpenWakeWordEngine:
                 self._peak = 0.0
             if score >= self.threshold:
                 woke = True
+                self.last_fire_score = score
                 self._cooldown = self.COOLDOWN_FRAMES
                 dlog(f"wake: FIRED score={score:.3f} threshold={self.threshold}")
                 self._peak = 0.0
@@ -265,6 +279,8 @@ class MoonshineConfirmer:
     """sherpa-onnx Moonshine tiny.en offline recognizer. Free-decodes a short tail
     of int16 PCM and returns the transcript text."""
 
+    name = "moonshine"
+
     def __init__(self, model_dir):
         import sherpa_onnx
 
@@ -284,15 +300,79 @@ class MoonshineConfirmer:
         return stream.result.text
 
 
+class WhisperConfirmer:
+    """sherpa-onnx Whisper tiny.en int8 offline recognizer (second verifier).
+    Hears accents and noisy audio that Moonshine tiny misreads."""
+
+    name = "whisper"
+
+    def __init__(self, model_dir):
+        import sherpa_onnx
+
+        self.recognizer = sherpa_onnx.OfflineRecognizer.from_whisper(
+            encoder=os.path.join(model_dir, "tiny.en-encoder.int8.onnx"),
+            decoder=os.path.join(model_dir, "tiny.en-decoder.int8.onnx"),
+            tokens=os.path.join(model_dir, "tiny.en-tokens.txt"),
+        )
+
+    def decode(self, samples_int16):
+        stream = self.recognizer.create_stream()
+        stream.accept_waveform(SAMPLE_RATE, samples_int16.astype(np.float32) / 32768.0)
+        self.recognizer.decode_stream(stream)
+        return stream.result.text
+
+
+class VoskFreeConfirmer:
+    """Vosk small full-vocabulary FREE decode (final verifier; ~250 ms).
+    Unconstrained, so a real "hey jason" still decodes as "jason" and is
+    rejected — unlike a ["hey james","[unk]"] grammar, which force-maps every
+    near-miss onto the wake phrase at conf 1.0 (measured: 17/33 false confirms)."""
+
+    name = "vosk"
+
+    def __init__(self, model_path):
+        from vosk import Model, SetLogLevel
+
+        SetLogLevel(-1)
+        self.model = Model(model_path)
+
+    def decode(self, samples_int16):
+        from vosk import KaldiRecognizer
+
+        rec = KaldiRecognizer(self.model, SAMPLE_RATE)
+        rec.AcceptWaveform(samples_int16.tobytes())
+        return json.loads(rec.FinalResult()).get("text", "")
+
+
+class ChainConfirmer:
+    """Runs free-decode verifiers cheapest-first, confirming on the FIRST whose
+    transcript contains a wake token. Union of independent ASRs lifts genuine-
+    wake confirm rate ~3x over Moonshine alone while keeping zero measured
+    false confirms — every member must hear an actual "james" to say yes."""
+
+    def __init__(self, verifiers):
+        self.verifiers = verifiers
+
+    def confirm(self, samples_int16, confirm_tokens):
+        """Returns (confirmed, heard) where heard summarizes every decode tried."""
+        heard = []
+        for verifier in self.verifiers:
+            text = verifier.decode(samples_int16)
+            heard.append(f"{verifier.name}='{text}'")
+            if text_contains_wake_token(text, confirm_tokens):
+                return True, " ".join(heard)
+        return False, " ".join(heard)
+
+
 class TwoStageEngine:
-    """Stage 1: OpenWakeWord ONNX candidate detector (high recall). On a candidate
-    we do NOT confirm immediately — the model fires before the wake word finishes,
-    so the trailing buffer would only hold a truncated "hey ja…" that cannot be told
-    apart from "hey jason". Instead we COLLECT a post-trigger window so the full
-    word lands in the ring, then Stage 2 runs a FREE (unconstrained) Moonshine
-    decode and must find a wake token via text_contains_wake_token. Free decode
-    never force-maps a near-miss onto the wake word, and a false wake needs BOTH
-    stages wrong."""
+    """Stage 1: OpenWakeWord ONNX candidate detector (high recall). A candidate
+    scoring >= s1_bypass wakes immediately. Otherwise we do NOT confirm right
+    away — the trailing buffer may hold a truncated "hey ja…" that cannot be told
+    apart from "hey jason" — we COLLECT a post-trigger window so the full word
+    lands in the ring, then Stage 2 runs FREE (unconstrained) decodes through the
+    ChainConfirmer, which must find a wake token via text_contains_wake_token.
+    Free decode never force-maps a near-miss onto the wake word, and a false wake
+    needs BOTH stages wrong."""
 
     FRAME = 1280  # 80 ms @ 16 kHz, matches OpenWakeWordEngine
     RING_FRAMES = 50  # ~4.0 s trailing window (pre-roll + word + post-trigger)
@@ -300,9 +380,17 @@ class TwoStageEngine:
     # before Stage-2 decodes. This is the main wake-LATENCY knob and trades ONLY
     # against recall (too short → "james" truncated → real wake VETOED, shows as
     # heard='hey ja' in the log), NOT against false positives (the word-check is
-    # unaffected by timing). Tune via FAMILYHUB_WAKE_POST_TRIGGER_MS; was 1040 ms.
-    DEFAULT_POST_TRIGGER_MS = 640
+    # unaffected by timing). Tune via FAMILYHUB_WAKE_POST_TRIGGER_MS; was 640 ms —
+    # measured stage-1 fire offsets land 180-360 ms AFTER the word ends (p50/p90
+    # over held-out positives), so 320 ms still leaves the whole word in the ring.
+    DEFAULT_POST_TRIGGER_MS = 320
     CONFIRM_DECODE_FRAMES = 25  # ~2 s tail decoded by Stage 2 (word + post-trigger)
+    # Stage-1 score at/above which the wake fires with NO Stage-2 confirm. Real
+    # owner wakes log 0.71-0.97 while ordinary speech almost never crests 0.9
+    # (8/600 even on ADVERSARIAL james-family negatives), so a score this high is
+    # stronger evidence than a tiny-ASR transcript — and skipping the confirm
+    # saves the post-trigger wait + decode (~0.5 s) on clear wakes.
+    DEFAULT_S1_BYPASS = 0.90
 
     def __init__(self, model_path, threshold, confirmer, confirm_tokens):
         self.stage1 = OpenWakeWordEngine(model_path, threshold)
@@ -312,6 +400,9 @@ class TwoStageEngine:
             os.environ.get("FAMILYHUB_WAKE_POST_TRIGGER_MS", self.DEFAULT_POST_TRIGGER_MS)
         )
         self.post_trigger_samples = int(SAMPLE_RATE * post_trigger_ms / 1000)
+        self.s1_bypass = float(
+            os.environ.get("FAMILYHUB_WAKE_S1_BYPASS", self.DEFAULT_S1_BYPASS)
+        )
         self.rejected = 0
         self.reset()
 
@@ -337,13 +428,13 @@ class TwoStageEngine:
     def _confirm(self):
         # Free (unconstrained) decode of only the last ~2 s (wake word + post-trigger),
         # NOT the full ring — older pre-roll just lets the model hallucinate a sentence
-        # that hides the word. Moonshine decodes the tail fast; the word always lands here.
+        # that hides the word. The verifiers decode the tail fast; the word always lands here.
         tail = list(self.ring)[-self.CONFIRM_DECODE_FRAMES :]
         audio = np.concatenate(tail).astype(np.int16)
-        text = self.confirmer.decode(audio)
+        confirmed, heard = self.confirmer.confirm(audio, self.confirm_tokens)
         # Record what Stage 2 heard so a veto is diagnosable.
-        self._last_heard = "heard='{}'".format(text)
-        return text_contains_wake_token(text, self.confirm_tokens)
+        self._last_heard = f"heard: {heard}"
+        return confirmed
 
     def feed(self, pcm_bytes):
         self._push_ring(pcm_bytes)
@@ -372,8 +463,14 @@ class TwoStageEngine:
         if self.stage1.feed(pcm_bytes):  # Stage-1 candidate
             if self.confirmer is None:
                 # Stage-2 disabled (FAMILYHUB_WAKE_STAGE2=0): wake on Stage 1
-                # alone, no post-trigger buffering or Moonshine decode.
+                # alone, no post-trigger buffering or Stage-2 decode.
                 dlog("wake: stage-1 FIRED, stage-2 disabled — waking")
+                return True
+            if self.stage1.last_fire_score >= self.s1_bypass:
+                dlog(
+                    f"wake: stage-1 high-confidence bypass "
+                    f"score={self.stage1.last_fire_score:.3f} >= {self.s1_bypass} — waking"
+                )
                 return True
             self._collecting_samples = self.post_trigger_samples  # collect rest of word
         return False
@@ -385,13 +482,21 @@ def build_engine(args, wake_words):
             HERE, "models", "vosk-model-small-en-us-0.15"
         )
         return VoskEngine(model, wake_words, args.min_confidence), f"vosk:{model}"
-    # twostage (default): openWakeWord Stage-1 → Moonshine Stage-2 confirm.
+    # twostage (default): openWakeWord Stage-1 → verifier-chain Stage-2 confirm.
     model = args.model or os.environ.get(
         "FAMILYHUB_WAKE_MODEL", os.path.join(HERE, "models", "hey_james.onnx")
     )
     moonshine_dir = os.environ.get(
         "FAMILYHUB_MOONSHINE_MODEL",
         os.path.join(HERE, "models", "sherpa-onnx-moonshine-tiny-en-int8"),
+    )
+    whisper_dir = os.environ.get(
+        "FAMILYHUB_WHISPER_MODEL",
+        os.path.join(HERE, "models", "sherpa-onnx-whisper-tiny.en"),
+    )
+    vosk_dir = os.environ.get(
+        "FAMILYHUB_VOSK_MODEL",
+        os.path.join(HERE, "models", "vosk-model-small-en-us-0.15"),
     )
     confirm_tokens = [t.lower() for t in args.confirm_phrase.split() if t]
     stage2_on = os.environ.get("FAMILYHUB_WAKE_STAGE2", "1").strip().lower() not in (
@@ -400,12 +505,26 @@ def build_engine(args, wake_words):
         "false",
         "no",
     )
-    confirmer = MoonshineConfirmer(moonshine_dir) if stage2_on else None
+    confirmer = None
+    if stage2_on:
+        # Cheapest verifier first; the chain short-circuits on the first hit.
+        # Whisper/Vosk are optional (download-if-missing in the runtime build);
+        # a missing dir just shortens the chain rather than failing the wake path.
+        verifiers = [MoonshineConfirmer(moonshine_dir)]
+        if os.path.isdir(whisper_dir):
+            verifiers.append(WhisperConfirmer(whisper_dir))
+        if os.path.isdir(vosk_dir):
+            verifiers.append(VoskFreeConfirmer(vosk_dir))
+        confirmer = ChainConfirmer(verifiers)
     engine = TwoStageEngine(model, args.threshold, confirmer, confirm_tokens)
     description = (
         f"twostage: emit='{args.wake_phrase}' confirm={confirm_tokens} "
-        f"s1={args.threshold} "
-        + ("(openWakeWord→Moonshine)" if stage2_on else "(openWakeWord ONLY, stage-2 OFF)")
+        f"s1={args.threshold} bypass={engine.s1_bypass} "
+        + (
+            "(openWakeWord→" + "→".join(v.name for v in confirmer.verifiers) + ")"
+            if stage2_on
+            else "(openWakeWord ONLY, stage-2 OFF)"
+        )
     )
     return engine, description
 

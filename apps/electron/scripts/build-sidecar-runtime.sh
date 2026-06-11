@@ -89,5 +89,19 @@ if [ ! -d "$SIDECAR/models/$VOSK" ]; then
   ( cd "$SIDECAR/models" && unzip -q "$VOSK.zip" && rm -f "$VOSK.zip" )
 fi
 
+# Whisper tiny.en (second Stage-2 wake verifier; int8 + tokens only, ~99 MB).
+# The release tarball also carries fp32 models we don't ship — extract, keep
+# the int8 pieces, drop the rest.
+WHISPER="sherpa-onnx-whisper-tiny.en"
+if [ ! -d "$SIDECAR/models/$WHISPER" ]; then
+  echo ">>> Downloading Whisper tiny.en (~99 MB int8)…"
+  curl -fsSL -o "$SIDECAR/models/$WHISPER.tar.bz2" \
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${WHISPER}.tar.bz2"
+  ( cd "$SIDECAR/models" \
+    && tar xjf "$WHISPER.tar.bz2" "$WHISPER/tiny.en-encoder.int8.onnx" \
+         "$WHISPER/tiny.en-decoder.int8.onnx" "$WHISPER/tiny.en-tokens.txt" \
+    && rm -f "$WHISPER.tar.bz2" )
+fi
+
 echo ">>> sidecar runtime ready: $PYBIN"
 "$PYBIN" -c "$DEPS_CHECK; print('deps OK')"

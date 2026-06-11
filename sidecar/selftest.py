@@ -89,6 +89,10 @@ def main():
         ("'the name of the guy is John'", say_pcm("the name of the guy is John")),
         ("bare 'James'", say_pcm("James")),
         ("'hey Jason'", say_pcm("hey Jason")),
+        # Observed real-world confusable: Moonshine decoded a genuine wake as
+        # "hey dreams" (2026-06-09 wake-debug.log) — the spoken phrase itself
+        # must still stay quiet through the whole pipeline.
+        ("'hey dreams'", say_pcm("hey dreams")),
         ("'hey can you hear me'", say_pcm("hey can you hear me")),
     ]
 
