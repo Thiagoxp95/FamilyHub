@@ -182,8 +182,8 @@ export function App(): React.JSX.Element {
         <UpdateControl />
       </div>
 
-      {/* The voice card appears only while James is invoked, and holds the
-          conversation — no mic meter, no update button (those live elsewhere). */}
+      {/* The top card is always present: while James is invoked it holds the
+          conversation; otherwise it shows the Brasília/Montreal clocks. */}
       {sessionActive ? (
         <header className="voice-strip voice-strip--live" aria-live="polite">
           <div className="voice-orb active" />
@@ -196,7 +196,12 @@ export function App(): React.JSX.Element {
             {liveInput ? <p className="voice-heard">You: {liveInput}</p> : null}
           </div>
         </header>
-      ) : null}
+      ) : (
+        <header className="voice-strip voice-strip--clock">
+          <div className="voice-orb" />
+          <IdleClock />
+        </header>
+      )}
 
       {errorMessage ? <div className="error-banner">{errorMessage}</div> : null}
 
@@ -253,6 +258,41 @@ export function App(): React.JSX.Element {
           onClose={() => setFocusedPanel(null)}
         />
       ) : null}
+    </div>
+  );
+}
+
+const clockZones = [
+  { label: "Brasília", timeZone: "America/Sao_Paulo" },
+  { label: "Montreal", timeZone: "America/Montreal" },
+] as const;
+
+function formatClock(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    hourCycle: "h23",
+    minute: "2-digit",
+    timeZone,
+  }).format(date);
+}
+
+// Self-contained so the per-second tick re-renders only the clock, not the app.
+function IdleClock(): React.JSX.Element {
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setNow(new Date()), 1_000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  return (
+    <div className="clock-row">
+      {clockZones.map((zone) => (
+        <div className="clock-zone" key={zone.timeZone}>
+          <p className="eyebrow">{zone.label}</p>
+          <p className="clock-time">{formatClock(now, zone.timeZone)}</p>
+        </div>
+      ))}
     </div>
   );
 }

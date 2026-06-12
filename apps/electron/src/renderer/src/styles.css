@@ -1740,12 +1740,42 @@ body.hub-modal-open {
 
 .calendar-expanded .cal-agenda,
 .reminders-expanded .rem {
-  max-width: 980px;
+  max-width: 1100px;
 }
 
 .calendar-expanded .cal-title,
 .reminders-expanded .rem-title {
   font-size: clamp(1.05rem, 2vw, 1.35rem);
+}
+
+/* Expanded calendar is read from across the kitchen — scale the whole
+   agenda up, not just the titles. */
+.calendar-expanded .cal-agenda {
+  gap: 34px;
+}
+
+.calendar-expanded .cal-day-head {
+  font-size: clamp(0.95rem, 1.6vw, 1.2rem);
+  margin-block-end: 14px;
+}
+
+.calendar-expanded .cal-item {
+  gap: 20px;
+  min-height: 72px;
+  padding: 13px 0;
+}
+
+.calendar-expanded .cal-time {
+  flex-basis: 130px;
+  font-size: clamp(1.1rem, 1.9vw, 1.45rem);
+}
+
+.calendar-expanded .cal-title {
+  font-size: clamp(1.45rem, 2.6vw, 2rem);
+}
+
+.calendar-expanded .cal-cal {
+  font-size: clamp(0.95rem, 1.5vw, 1.15rem);
 }
 
 .quad--notes {
@@ -2110,4 +2140,30 @@ body.hub-modal-open {
    so collapse its grid from three columns to two (orb + contained transcript). */
 .voice-strip--live {
   grid-template-columns: 56px minmax(0, 1fr);
+}
+
+/* Idle card: same shell as the live strip, but holding the dual-timezone
+   clock instead of a conversation. */
+.voice-strip--clock {
+  grid-template-columns: 56px minmax(0, 1fr);
+}
+
+.clock-row {
+  align-items: center;
+  display: flex;
+  gap: 48px;
+  min-width: 0;
+}
+
+.clock-zone {
+  display: grid;
+  gap: 2px;
+}
+
+.clock-time {
+  color: var(--hub-text, #11181b);
+  font-size: clamp(1.65rem, 3.4vw, 2.9rem);
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  line-height: 1;
 }
