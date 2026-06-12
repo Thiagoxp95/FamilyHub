@@ -164,8 +164,12 @@ export function planComputerTask(task: string): ComputerTaskPlan {
   }
 
   // Pure app launch: "open <app>", "launch <app>", "open the <app> app".
+  // Strips a trailing "app"/"application" and an "on the computer"-style tail —
+  // Gemini phrases tasks like "open the Linear application", and feeding that
+  // verbatim to `open -a` fails, dropping a trivial launch into computer-use
+  // (which then can't run at all on a Mac without the cxdo helper).
   const appMatch = t.match(
-    /^(?:please\s+)?(?:open|launch|start|fire up|bring up)\s+(?:the\s+)?(.+?)(?:\s+app)?[.!]?$/i,
+    /^(?:please\s+)?(?:open|launch|start|fire up|bring up)\s+(?:the\s+)?(.+?)(?:\s+app(?:lication)?)?(?:\s+(?:on|in)\s+(?:the\s+|my\s+|this\s+)?(?:computer|mac|machine|screen|desktop))?[.!]?$/i,
   );
   if (appMatch?.[1]) {
     const app = appMatch[1].trim();
@@ -250,6 +254,16 @@ function runWithCxdo(
       (err, stdout, stderr) => {
         const out = (stdout ?? "").trim();
         if (err) {
+          // No cxdo on this machine (e.g. the kitchen Mac) — say so in a
+          // sentence the assistant can speak, not "spawn cxdo ENOENT".
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+            resolve({
+              ok: false,
+              error:
+                "Computer control isn't set up on this Mac — the cxdo helper is not installed.",
+            });
+            return;
+          }
           const reason = (stderr ?? "").trim() || err.message;
           resolve(
             out

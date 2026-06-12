@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { planComputerTask } from "./computerControl";
+import { describe, expect, it, vi } from "vitest";
+import { planComputerTask, runComputerTask } from "./computerControl";
+
+const execFileMock = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", () => ({ execFile: execFileMock }));
 
 describe("planComputerTask", () => {
   it("routes a bare app open to a direct `open -a`", () => {
@@ -14,6 +17,27 @@ describe("planComputerTask", () => {
     expect(planComputerTask("open the Calculator app")).toEqual({
       kind: "open-app",
       app: "Calculator",
+    });
+  });
+
+  it("strips 'application' and an 'on the computer' tail from app launches", () => {
+    // The exact phrasing that fell through to cxdo (and died with ENOENT on a
+    // Mac without the helper) instead of a plain `open -a Linear`.
+    expect(planComputerTask("open the Linear application")).toEqual({
+      kind: "open-app",
+      app: "Linear",
+    });
+    expect(planComputerTask("open Linear application")).toEqual({
+      kind: "open-app",
+      app: "Linear",
+    });
+    expect(planComputerTask("open the Linear application on the computer")).toEqual({
+      kind: "open-app",
+      app: "Linear",
+    });
+    expect(planComputerTask("launch Spotify on my Mac")).toEqual({
+      kind: "open-app",
+      app: "Spotify",
     });
   });
 
@@ -83,5 +107,29 @@ describe("planComputerTask", () => {
       kind: "computer-use",
     });
     expect(planComputerTask("")).toEqual({ kind: "computer-use" });
+  });
+});
+
+describe("runComputerTask without cxdo installed", () => {
+  it("reports a speakable error instead of the raw spawn ENOENT", async () => {
+    execFileMock.mockImplementation(
+      (
+        _cmd: string,
+        _args: string[],
+        _opts: unknown,
+        cb: (e: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        const error = new Error("spawn cxdo ENOENT");
+        (error as NodeJS.ErrnoException).code = "ENOENT";
+        cb(error, "", "");
+      },
+    );
+
+    // An interaction task routes straight to cxdo.
+    const result = await runComputerTask("search for cheap flights");
+
+    expect(result.ok).toBe(false);
+    expect(result.error).not.toMatch(/spawn|ENOENT/);
+    expect(result.error).toMatch(/isn't set up on this Mac/);
   });
 });
