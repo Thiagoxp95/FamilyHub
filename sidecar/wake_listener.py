@@ -541,10 +541,13 @@ def main():
     parser.add_argument(
         "--threshold",
         type=float,
-        # 0.45 is the tuned recall-first default (was 0.5): accented/real-mic
-        # "Hey James" still fires, and Stage-2 Moonshine rejects the extra
-        # candidates. Matches the value the dev box sets via ~/.familyhub/.env.
-        default=float(os.environ.get("FAMILYHUB_WAKE_THRESHOLD", "0.45")),
+        # 0.32 (was 0.45): real casual-voice "Hey James" attempts logged stage-1
+        # peaks of 0.30-0.47 and silently missed — the user had to speak loud
+        # and over-articulate to crest 0.45. The verifier chain guards
+        # precision now, so the candidate gate sits just under the observed
+        # real-miss floor. Bench: no extra false wakes at 0.32 vs 0.45
+        # (4/300 vs 5/300 adversarial negatives, 0/80 background speech).
+        default=float(os.environ.get("FAMILYHUB_WAKE_THRESHOLD", "0.32")),
         help="stage-1 openWakeWord candidate threshold; tuned low for two-stage recall.",
     )
     parser.add_argument(

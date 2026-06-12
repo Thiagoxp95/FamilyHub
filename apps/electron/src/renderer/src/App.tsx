@@ -394,7 +394,12 @@ async function startMicrophoneLoop({
         autoGainControl: true,
         channelCount: 1,
         echoCancellation: true,
-        noiseSuppression: true,
+        // OFF: Chrome's noise suppression eats the soft consonants of casual
+        // far-field speech — exactly the "Hey James" said from across the
+        // kitchen — and the wake model + Stage-2 ASRs all handle raw room
+        // audio better than processed audio. Keep echoCancellation (barge-in
+        // while James speaks) and AGC (lifts quiet far speech).
+        noiseSuppression: false,
       },
     });
     const AudioContextConstructor =
