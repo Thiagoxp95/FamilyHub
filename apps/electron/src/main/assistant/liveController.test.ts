@@ -386,6 +386,112 @@ describe("LiveController", () => {
     releaseComputer();
   });
 
+  it("mutes the mic while a tool call is in flight so chatter cannot reach Gemini", async () => {
+    const transcriber = new FakeTranscriber();
+    const sessions: FakeSession[] = [];
+    const sink = createSink();
+    let releaseTool: () => void = () => {};
+    const runTool = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        releaseTool = resolve;
+      });
+      return { ok: true };
+    });
+    const controller = new LiveController({
+      createTranscriber: () => transcriber,
+      createSession: () => {
+        const session = new FakeSession();
+        sessions.push(session);
+        return session;
+      },
+      runTool,
+      sink,
+      idleTimeoutMs: 5_000,
+    });
+    await controller.start();
+
+    transcriber.emit("hey james add an event");
+    await vi.waitFor(() => expect(sessions).toHaveLength(1));
+    const session = sessions[0];
+
+    controller.handleFrame("before-tool"); // live, no tool — streamed
+    session?.handlers?.onEvent({
+      kind: "toolCall",
+      id: "t1",
+      name: "create_calendar_event",
+      args: {},
+    });
+    await vi.waitFor(() => expect(runTool).toHaveBeenCalledTimes(1));
+
+    // Kitchen chatter while the tool runs — must NOT reach Gemini, but MUST
+    // feed the local wake listener so "hey james" can still interrupt.
+    const writesBefore = transcriber.writes.length;
+    controller.handleFrame("chatter-1");
+    controller.handleFrame("chatter-2");
+    expect(session?.sentFrames).toEqual(["before-tool"]);
+    expect(transcriber.writes.slice(writesBefore)).toEqual([
+      "chatter-1",
+      "chatter-2",
+    ]);
+
+    // Once the tool responds, the mic re-opens automatically.
+    releaseTool();
+    await vi.waitFor(() => expect(session?.toolResponses).toHaveLength(1));
+    controller.handleFrame("after-tool");
+    expect(session?.sentFrames).toEqual(["before-tool", "after-tool"]);
+  });
+
+  it("re-opens the mic mid-tool when the wake phrase is heard again", async () => {
+    const transcriber = new FakeTranscriber();
+    const sessions: FakeSession[] = [];
+    const sink = createSink();
+    let releaseTool: () => void = () => {};
+    const runTool = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        releaseTool = resolve;
+      });
+      return { ok: true };
+    });
+    const controller = new LiveController({
+      createTranscriber: () => transcriber,
+      createSession: () => {
+        const session = new FakeSession();
+        sessions.push(session);
+        return session;
+      },
+      runTool,
+      sink,
+      idleTimeoutMs: 5_000,
+    });
+    await controller.start();
+
+    transcriber.emit("hey james add an event");
+    await vi.waitFor(() => expect(sessions).toHaveLength(1));
+    const session = sessions[0];
+
+    session?.handlers?.onEvent({
+      kind: "toolCall",
+      id: "t1",
+      name: "create_calendar_event",
+      args: {},
+    });
+    await vi.waitFor(() => expect(runTool).toHaveBeenCalledTimes(1));
+
+    controller.handleFrame("gated"); // dropped — tool in flight
+    expect(session?.sentFrames).toEqual([]);
+
+    // Wake phrase during the tool re-opens the mic WITHOUT starting a second
+    // session, so the user can barge in.
+    transcriber.emit("hey james never mind");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(sessions).toHaveLength(1);
+
+    controller.handleFrame("barge-in");
+    expect(session?.sentFrames).toEqual(["barge-in"]);
+
+    releaseTool();
+  });
+
   it("resets dashboard focus when the session ends (collapses full-screen quadrants)", async () => {
     const transcriber = new FakeTranscriber();
     const sessions: FakeSession[] = [];

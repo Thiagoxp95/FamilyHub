@@ -146,6 +146,10 @@ export class LiveController {
   // Computer-control tasks specifically in flight — while > 0 we suppress tile
   // zoom tool calls so "open an app" doesn't full-screen the calendar quadrant.
   private computerTasksInFlight = 0;
+  // While tools run the mic is gated: kitchen chatter must not stream to Gemini
+  // and steer the turn off topic. Saying the wake phrase mid-tool flips this
+  // override so the user can still barge in; it clears once all tools respond.
+  private toolMicGateOverridden = false;
   private finalized = true;
   private inputTurnBuffer = "";
   private outputTurnBuffer = "";
@@ -212,9 +216,21 @@ export class LiveController {
     // compute and competes with the live audio path.
     if (this.state.phase === "idle") {
       this.transcriber?.write(frame);
+    } else if (this.micGatedForTools()) {
+      // A tool is running: drop the frame so kitchen chatter can't reach
+      // Gemini and derail the turn, but feed the local wake listener so
+      // "hey james" can still re-open the mic mid-tool.
+      this.transcriber?.write(frame);
+      return;
     }
 
     this.apply({ type: "frame", frame });
+  }
+
+  // True while at least one tool call is in flight and the user has not
+  // re-opened the mic with the wake phrase.
+  private micGatedForTools(): boolean {
+    return this.inFlightToolCount > 0 && !this.toolMicGateOverridden;
   }
 
   async endLive(): Promise<void> {
@@ -244,6 +260,17 @@ export class LiveController {
     }
 
     if (this.state.phase !== "idle") {
+      // Mid-session the only thing the local listener is allowed to do is
+      // re-open a tool-gated mic on the wake phrase — never start a session.
+      if (
+        this.micGatedForTools() &&
+        transcriptContainsWakePhrase(text, this.wakePhrases)
+      ) {
+        debug(`wake during tool — mic re-opened ("${trimmed}")`);
+        this.toolMicGateOverridden = true;
+        this.transcriber?.reset();
+        this.sink.noteInfo("Wake word heard mid-tool — listening again.");
+      }
       return;
     }
 
@@ -285,6 +312,7 @@ export class LiveController {
     this.pendingReason = null;
     this.inFlightToolCount = 0;
     this.computerTasksInFlight = 0;
+    this.toolMicGateOverridden = false;
     this.inputTurnBuffer = "";
     this.outputTurnBuffer = "";
     // Acknowledge the wake IMMEDIATELY, before the Gemini connect (median
@@ -482,6 +510,14 @@ export class LiveController {
     // sibling tool dispatched in the same turn sees it and doesn't re-arm the
     // idle timer out from under it.
     this.inFlightToolCount += 1;
+    if (this.inFlightToolCount === 1) {
+      // First tool of the batch: gate the mic and clear the local listener's
+      // rolling buffer so the original "hey james …" that started the session
+      // can't instantly count as a fresh mid-tool wake.
+      this.toolMicGateOverridden = false;
+      this.transcriber?.reset();
+      debug(`mic gated while ${name} runs (wake phrase re-opens it)`);
+    }
     const isComputerTask = name === computerToolName;
     if (isComputerTask) {
       this.computerTasksInFlight += 1;
@@ -512,6 +548,11 @@ export class LiveController {
     // Resume the idle countdown only once every in-flight tool has responded, so
     // a quick tool can't kill the session while a slow one is still running.
     if (!this.finalized && this.inFlightToolCount === 0) {
+      // All tools done — un-gate the mic and clear any leftover gated chatter
+      // from the local listener so it can't trigger a stale wake later.
+      this.toolMicGateOverridden = false;
+      this.transcriber?.reset();
+      debug("all tools responded — mic re-opened");
       this.armIdleTimer();
     }
   }
