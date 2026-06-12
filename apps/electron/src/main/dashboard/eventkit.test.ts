@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isAuthError, loadReminders, parseCalendar, parseReminders } from "./eventkit";
+import {
+  isAuthError,
+  keepLastGood,
+  loadReminders,
+  parseCalendar,
+  parseReminders,
+  type RemindersResult,
+} from "./eventkit";
 
 const US = String.fromCharCode(31);
 const RS = String.fromCharCode(30);
@@ -46,6 +53,7 @@ describe("parseCalendar", () => {
         allDay: false,
         calendar: "Work",
         end: "2026-06-05T09:15:00",
+        id: "uid1",
         start: "2026-06-05T09:00:00",
         title: "Standup",
       },
@@ -53,6 +61,7 @@ describe("parseCalendar", () => {
         allDay: false,
         calendar: "Home",
         end: "2026-06-05T13:30:00",
+        id: "uid2",
         start: "2026-06-05T12:30:00",
         title: "Lunch",
       },
@@ -67,10 +76,44 @@ describe("parseCalendar", () => {
         allDay: true,
         calendar: "Home",
         end: "2026-06-05T08:30:00",
+        id: "u",
         start: "2026-06-05T08:00:00",
         title: "(no title)",
       },
     ]);
+  });
+});
+
+describe("keepLastGood", () => {
+  const good: RemindersResult = {
+    status: "ok",
+    lists: [{ name: "To Buy", items: [{ title: "Milk" }] }],
+  };
+
+  it("keeps the previous ok data when a refresh errors", () => {
+    expect(
+      keepLastGood<RemindersResult>(good, { status: "error", error: "timed out" }),
+    ).toBe(good);
+  });
+
+  it("replaces ok data on a genuine permission change", () => {
+    expect(keepLastGood<RemindersResult>(good, { status: "denied" })).toEqual({
+      status: "denied",
+    });
+  });
+
+  it("lets an error through when there is no good data yet", () => {
+    expect(
+      keepLastGood<RemindersResult>(
+        { status: "loading" },
+        { status: "error", error: "unavailable" },
+      ),
+    ).toEqual({ status: "error", error: "unavailable" });
+  });
+
+  it("always accepts fresh ok data", () => {
+    const fresh: RemindersResult = { status: "ok", lists: [] };
+    expect(keepLastGood<RemindersResult>(good, fresh)).toBe(fresh);
   });
 });
 

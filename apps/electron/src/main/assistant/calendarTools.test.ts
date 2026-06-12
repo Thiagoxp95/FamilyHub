@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createEvent,
   isSameEvent,
   isSameReminder,
   listEvents,
@@ -115,6 +116,36 @@ describe("isSameEvent (create idempotency)", () => {
         calendar: "Calendar",
       }),
     ).toBe(true);
+  });
+});
+
+describe("createEvent with a cached snapshot", () => {
+  beforeEach(() => {
+    runWithLaunchMock.mockClear();
+  });
+
+  it("returns the cached duplicate without any AppleScript call", async () => {
+    const event = await createEvent(
+      { title: "Daily Dev", start: "2026-06-09T09:00:00" },
+      [baseEvent],
+    );
+
+    expect(event).toBe(baseEvent);
+    expect(runWithLaunchMock).not.toHaveBeenCalled();
+  });
+
+  it("skips the slow live pre-scan when a snapshot is provided", async () => {
+    runWithLaunchMock.mockResolvedValueOnce(
+      `uid-9${String.fromCharCode(31)}Calendar`,
+    );
+
+    await createEvent({ title: "Dentist", start: "2026-06-09T15:00:00" }, []);
+
+    // Exactly one osascript run: the create itself, no listEvents pre-scan.
+    expect(runWithLaunchMock).toHaveBeenCalledTimes(1);
+    const calls = runWithLaunchMock.mock.calls as unknown as [string, string][];
+    const script: string = calls[0]?.[0] ?? "";
+    expect(script).toContain("make new event");
   });
 });
 

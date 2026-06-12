@@ -143,7 +143,7 @@ export function RemindersPanel({
       .finally(() => setConnecting(false));
   }
 
-  if (!result) {
+  if (!result || result.status === "loading") {
     return <p className="quad-placeholder">Loading reminders…</p>;
   }
 

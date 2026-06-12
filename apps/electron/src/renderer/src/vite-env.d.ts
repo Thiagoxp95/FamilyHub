@@ -130,11 +130,13 @@ interface CalendarEvent {
   allDay: boolean;
   calendar: string;
   end: string;
+  id?: string;
   start: string;
   title: string;
 }
 
 type CalendarResult =
+  | { status: "loading" }
   | { status: "ok"; events: CalendarEvent[] }
   | { status: "writeOnly" }
   | { status: "denied" }
@@ -152,6 +154,7 @@ interface ReminderList {
 }
 
 type RemindersResult =
+  | { status: "loading" }
   | { status: "ok"; lists: ReminderList[] }
   | { status: "denied" }
   | { status: "error"; error: string };

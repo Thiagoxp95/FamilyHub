@@ -155,9 +155,9 @@ tell application "Calendar"
   repeat with cal in calendars
     set calName to name of cal
     try
-      set evs to (every event of cal whose start date >= startDate and start date < endDate)
-      repeat with e in evs
-        set output to output & (uid of e) & US & (summary of e) & US & my isoOf(start date of e) & US & my isoOf(end date of e) & US & ((allday event of e) as text) & US & calName & RS
+      set evProps to properties of (every event of cal whose start date >= startDate and start date < endDate)
+      repeat with p in evProps
+        set output to output & (uid of p) & US & (summary of p) & US & my isoOf(start date of p) & US & my isoOf(end date of p) & US & ((allday event of p) as text) & US & calName & RS
       end repeat
     end try
   end repeat
@@ -195,13 +195,14 @@ tell application "Reminders"
   repeat with lst in lists
     set listName to name of lst
     try
-      repeat with r in (reminders of lst whose completed is false)
+      set remProps to properties of (reminders of lst whose completed is false)
+      repeat with p in remProps
         set dueText to ""
         try
-          set dd to due date of r
+          set dd to due date of p
           if dd is not missing value then set dueText to my isoOf(dd)
         end try
-        set output to output & (id of r) & US & listName & US & (name of r) & US & dueText & RS
+        set output to output & (id of p) & US & listName & US & (name of p) & US & dueText & RS
       end repeat
     end try
   end repeat
@@ -230,26 +231,39 @@ ${isoHandlers}`;
 
 // ---------- calendar writes ----------
 
-export async function createEvent(input: CreateEventInput): Promise<AgentEvent> {
+export async function createEvent(
+  input: CreateEventInput,
+  existing?: AgentEvent[],
+): Promise<AgentEvent> {
   const startDate = parseDate(input.start);
 
   // Idempotency: if an identical event already exists, return it instead of
-  // creating a duplicate. Look only as far ahead as the event's own day.
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const daysAhead = Math.max(
-    0,
-    Math.ceil((startDate.getTime() - todayStart.getTime()) / 86_400_000),
-  );
-  try {
-    const duplicate = (await listEvents(daysAhead)).find((event) =>
-      isSameEvent(event, input),
-    );
+  // creating a duplicate. Dedup against the caller's cached snapshot when one
+  // is provided — a fresh listEvents() scan walks every calendar and takes
+  // ~20s, stalling the live turn. Without a snapshot, fall back to a live
+  // scan bounded to the event's own day.
+  if (existing) {
+    const duplicate = existing.find((event) => isSameEvent(event, input));
     if (duplicate) {
       return duplicate;
     }
-  } catch {
-    // Best effort — if the pre-check fails, fall through and create.
+  } else {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const daysAhead = Math.max(
+      0,
+      Math.ceil((startDate.getTime() - todayStart.getTime()) / 86_400_000),
+    );
+    try {
+      const duplicate = (await listEvents(daysAhead)).find((event) =>
+        isSameEvent(event, input),
+      );
+      if (duplicate) {
+        return duplicate;
+      }
+    } catch {
+      // Best effort — if the pre-check fails, fall through and create.
+    }
   }
 
   const allDay = input.allDay === true;

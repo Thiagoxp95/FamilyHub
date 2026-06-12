@@ -17,11 +17,16 @@ export interface CalendarEvent {
   allDay: boolean;
   calendar: string;
   end: string;
+  // Calendar event uid. Carried so the assistant can answer "what's on
+  // tomorrow" and target updates/deletes from cached data without a slow
+  // re-scan. Not shown in UI.
+  id?: string;
   start: string;
   title: string;
 }
 
 export type CalendarResult =
+  | { status: "loading" }
   | { status: "ok"; events: CalendarEvent[] }
   | { status: "writeOnly" }
   | { status: "denied" }
@@ -41,9 +46,18 @@ export interface ReminderList {
 }
 
 export type RemindersResult =
+  | { status: "loading" }
   | { status: "ok"; lists: ReminderList[] }
   | { status: "denied" }
   | { status: "error"; error: string };
+
+// A failed refresh must not clobber data the kitchen display is already
+// showing — a transient timeout would otherwise flip a populated card back to
+// the "needs access" / error state. Real permission states (denied, writeOnly)
+// still replace good data so a genuine revocation surfaces.
+export function keepLastGood<T extends { status: string }>(prev: T, next: T): T {
+  return next.status === "error" && prev.status === "ok" ? prev : next;
+}
 
 export function appleScriptString(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
@@ -83,6 +97,9 @@ function buildUpcomingCalendarScript(days: number): string {
   const start = new Date();
   start.setHours(0, 0, 0, 0);
   const end = new Date(start.getTime() + Math.max(1, days) * 24 * 60 * 60 * 1000);
+  // `properties of (every event whose …)` fetches each matching event's whole
+  // record in one Apple event per calendar; reading fields off the records is
+  // local. Per-event property reads were 5 Apple-event round trips per event.
   return `set US to (ASCII character 31)
 set RS to (ASCII character 30)
 set startDate to ${appleScriptDate(start)}
@@ -92,9 +109,9 @@ tell application "Calendar"
   repeat with cal in calendars
     set calName to name of cal
     try
-      set evs to (every event of cal whose start date >= startDate and start date < endDate)
-      repeat with e in evs
-        set output to output & (uid of e) & US & (summary of e) & US & my isoOf(start date of e) & US & my isoOf(end date of e) & US & ((allday event of e) as text) & US & calName & RS
+      set evProps to properties of (every event of cal whose start date >= startDate and start date < endDate)
+      repeat with p in evProps
+        set output to output & (uid of p) & US & (summary of p) & US & my isoOf(start date of p) & US & my isoOf(end date of p) & US & ((allday event of p) as text) & US & calName & RS
       end repeat
     end try
   end repeat
@@ -104,6 +121,11 @@ ${isoHandlers}`;
 }
 
 function buildRemindersScript(): string {
+  // `properties of (reminders … whose completed is false)` fetches every open
+  // reminder's record in one Apple event per list; reading fields off the
+  // records is local. The previous per-reminder property reads were ~3 Apple
+  // events per item — 2.5 minutes on these lists, past the 120s osascript
+  // timeout, so the card never loaded. Batched, the same scan is ~12s.
   return `set US to (ASCII character 31)
 set RS to (ASCII character 30)
 set output to ""
@@ -111,13 +133,14 @@ tell application "Reminders"
   repeat with lst in lists
     set listName to name of lst
     try
-      repeat with r in (reminders of lst whose completed is false)
+      set remProps to properties of (reminders of lst whose completed is false)
+      repeat with p in remProps
         set dueText to ""
         try
-          set dd to due date of r
+          set dd to due date of p
           if dd is not missing value then set dueText to my isoOf(dd)
         end try
-        set output to output & (id of r) & US & listName & US & (name of r) & US & dueText & RS
+        set output to output & (id of p) & US & listName & US & (name of p) & US & dueText & RS
       end repeat
     end try
   end repeat
@@ -247,6 +270,7 @@ export function parseCalendar(raw: string): CalendarEvent[] {
     }
 
     const fields = record.split(US);
+    const id = fields[0];
     const title = fields[1];
     const start = fields[2];
     const end = fields[3];
@@ -257,13 +281,17 @@ export function parseCalendar(raw: string): CalendarEvent[] {
       continue;
     }
 
-    events.push({
+    const event: CalendarEvent = {
       allDay: allDay === "true",
       calendar: calendar ?? "",
       end: end ?? start,
       start,
       title: title && title.trim() ? title : "(no title)",
-    });
+    };
+    if (id && id.trim()) {
+      event.id = id;
+    }
+    events.push(event);
   }
 
   events.sort((a, b) => a.start.localeCompare(b.start));

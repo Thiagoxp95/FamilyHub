@@ -25,10 +25,10 @@ import {
 } from "./localTranscriber";
 import { AssistantService } from "./service";
 import type { AssistantSnapshot } from "./types";
-import type { AgentReminder } from "./calendarTools";
+import type { AgentEvent, AgentReminder } from "./calendarTools";
 import type { DashboardController, DashboardPanel } from "../dashboard/ipc";
 import type { UpdaterController, UpdaterStatus } from "../updater";
-import type { ReminderList } from "../dashboard/eventkit";
+import type { CalendarEvent, ReminderList } from "../dashboard/eventkit";
 import {
   isNoteColor,
   type NoteInput,
@@ -85,24 +85,41 @@ export function registerAssistantIpc(
       Array.isArray(v) ? v.filter((n): n is number => typeof n === "number") : undefined;
 
     switch (name) {
-      case calendarToolNames.listEvents:
+      case calendarToolNames.listEvents: {
         dashboard?.focusPanel("calendar");
-        return {
-          ok: true,
-          events: await calendarTools.listEvents(
-            typeof args.daysAhead === "number" ? args.daysAhead : undefined,
-          ),
-        };
+        const daysAhead =
+          typeof args.daysAhead === "number" ? args.daysAhead : undefined;
+        // Served from the dashboard's in-memory cache (refreshed every 5 min
+        // and after every write) so "what's on tomorrow" answers instantly; a
+        // fresh AppleScript scan takes ~20s and stalls the live turn. The
+        // cache covers 14 days — only a longer horizon needs a live scan.
+        const cached =
+          dashboard && (daysAhead === undefined || daysAhead <= 13)
+            ? await dashboard.getCalendar()
+            : null;
+        if (cached?.status === "ok") {
+          return { ok: true, events: agentEventsFromCache(cached.events, daysAhead) };
+        }
+        return { ok: true, events: await calendarTools.listEvents(daysAhead) };
+      }
       case calendarToolNames.createEvent: {
         dashboard?.focusPanel("calendar");
-        const event = await calendarTools.createEvent({
-          title: str(args.title),
-          start: str(args.start),
-          end: optStr(args.end),
-          allDay: args.allDay === true,
-          calendar: optStr(args.calendar),
-          alarmsMinutesBefore: minutes(args.alarmsMinutesBefore),
-        });
+        // Feed the idempotency pre-check from the cache so a duplicate create
+        // is caught without a slow live scan.
+        const cached = await dashboard?.getCalendar();
+        const existing =
+          cached?.status === "ok" ? agentEventsFromCache(cached.events) : undefined;
+        const event = await calendarTools.createEvent(
+          {
+            title: str(args.title),
+            start: str(args.start),
+            end: optStr(args.end),
+            allDay: args.allDay === true,
+            calendar: optStr(args.calendar),
+            alarmsMinutesBefore: minutes(args.alarmsMinutesBefore),
+          },
+          existing,
+        );
         await dashboard?.refreshCalendar();
         return { ok: true, event };
       }
@@ -440,6 +457,38 @@ function focusDashboard(
 
 function missingDashboard(): Record<string, unknown> {
   return { ok: false, error: "Dashboard is unavailable." };
+}
+
+// Map the dashboard's cached events into the id-carrying shape the agent uses,
+// optionally trimmed to the requested daysAhead window (the cache holds the
+// full 14-day horizon).
+function agentEventsFromCache(
+  events: CalendarEvent[],
+  daysAhead?: number,
+): AgentEvent[] {
+  let horizon = Number.POSITIVE_INFINITY;
+  if (daysAhead !== undefined) {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    horizon = start.getTime() + (Math.max(0, Math.floor(daysAhead)) + 1) * 86_400_000;
+  }
+
+  const agentEvents: AgentEvent[] = [];
+  for (const event of events) {
+    const at = Date.parse(event.start);
+    if (!Number.isFinite(at) || at >= horizon) {
+      continue;
+    }
+    agentEvents.push({
+      id: event.id ?? "",
+      title: event.title,
+      start: event.start,
+      end: event.end,
+      allDay: event.allDay,
+      calendar: event.calendar,
+    });
+  }
+  return agentEvents;
 }
 
 // Flatten the cached reminder lists into the id-carrying shape the agent uses,

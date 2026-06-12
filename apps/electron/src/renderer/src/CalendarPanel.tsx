@@ -54,7 +54,7 @@ export function CalendarPanel(): React.JSX.Element {
     [calendar, reminders],
   );
 
-  if (!calendar) {
+  if (!calendar || calendar.status === "loading") {
     return <p className="quad-placeholder">Loading calendar…</p>;
   }
 

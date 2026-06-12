@@ -1,5 +1,6 @@
 import { BrowserWindow, ipcMain } from "electron";
 import {
+  keepLastGood,
   loadCalendar,
   loadReminders,
   type CalendarResult,
@@ -37,6 +38,7 @@ export interface DashboardController {
   // Select a specific Reminders list (by name) in the UI, e.g. when the
   // assistant is talking about the "To Buy" list. null clears the selection.
   focusReminderList: (list: string | null) => void;
+  getCalendar: () => Promise<CalendarResult>;
   getNotes: () => Promise<Note[]>;
   getReminders: () => Promise<RemindersResult>;
   getWeather: () => Promise<WeatherResult>;
@@ -59,21 +61,32 @@ function broadcast(channel: string, payload: unknown): void {
 
 export function registerDashboardIpc(userDataDirectory: string): DashboardController {
   const notesStore = createUserDataNotesStore(userDataDirectory);
+  // "loading" until the first scan lands — initializing these to "denied" made
+  // the cards demand permission on every launch while the slow first scan ran.
   let weather: WeatherResult = { ok: false, error: "Loading weather…" };
-  let calendar: CalendarResult = { status: "denied" };
-  let reminders: RemindersResult = { status: "denied" };
+  let calendar: CalendarResult = { status: "loading" };
+  let reminders: RemindersResult = { status: "loading" };
   let notes: Note[] = [];
   let focusedPanel: DashboardPanel = null;
   let selectedReminderList: string | null = null;
+
+  // In-flight refreshes, shared so a Connect click, a voice query, and the
+  // periodic timer don't stack concurrent multi-second AppleScript scans.
+  let calendarRefresh: Promise<void> | null = null;
+  let remindersRefresh: Promise<void> | null = null;
 
   async function refreshWeather(): Promise<WeatherResult> {
     try {
       weather = { ok: true, weather: await loadWeather() };
     } catch (error) {
-      weather = {
-        ok: false,
-        error: error instanceof Error ? error.message : "Weather unavailable.",
-      };
+      // Keep the last good snapshot on a transient failure so the card (and a
+      // voice query) never trades real data for an error message.
+      if (!weather.ok) {
+        weather = {
+          ok: false,
+          error: error instanceof Error ? error.message : "Weather unavailable.",
+        };
+      }
     }
 
     broadcast(weatherChannel, weather);
@@ -86,14 +99,39 @@ export function registerDashboardIpc(userDataDirectory: string): DashboardContro
     return weather.ok ? weather : refreshWeather();
   }
 
-  async function refreshCalendar(): Promise<void> {
-    calendar = await loadCalendar();
-    broadcast(calendarChannel, calendar);
+  function refreshCalendar(): Promise<void> {
+    calendarRefresh ??= (async () => {
+      try {
+        calendar = keepLastGood(calendar, await loadCalendar());
+        broadcast(calendarChannel, calendar);
+      } finally {
+        calendarRefresh = null;
+      }
+    })();
+    return calendarRefresh;
   }
 
-  async function refreshReminders(): Promise<void> {
-    reminders = await loadReminders();
-    broadcast(remindersChannel, reminders);
+  function refreshReminders(): Promise<void> {
+    remindersRefresh ??= (async () => {
+      try {
+        reminders = keepLastGood(reminders, await loadReminders());
+        broadcast(remindersChannel, reminders);
+      } finally {
+        remindersRefresh = null;
+      }
+    })();
+    return remindersRefresh;
+  }
+
+  // For the assistant: serve the in-memory calendar (loaded in the background)
+  // so "what's on tomorrow" answers instantly instead of triggering a fresh
+  // ~20s AppleScript scan. Only fall back to a live load if the cache isn't
+  // ready yet.
+  async function getCalendar(): Promise<CalendarResult> {
+    if (calendar.status !== "ok") {
+      await refreshCalendar();
+    }
+    return calendar;
   }
 
   // For the assistant: serve the in-memory reminders (loaded in the background)
@@ -206,6 +244,7 @@ export function registerDashboardIpc(userDataDirectory: string): DashboardContro
     deleteNote,
     focusPanel,
     focusReminderList,
+    getCalendar,
     getNotes: () => notesStore.getNotes(),
     getReminders,
     getWeather,
