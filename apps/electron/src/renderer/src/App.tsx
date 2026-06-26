@@ -1,10 +1,36 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { base64ToInt16, convertFloatSamplesToLinear16, int16ToBase64 } from "./audioClip";
 import { CalendarPanel } from "./CalendarPanel";
+import { MicPicker } from "./MicPicker";
 import { NotesPanel } from "./NotesPanel";
 import { RemindersPanel } from "./RemindersPanel";
 import { UpdateControl } from "./UpdateControl";
 import { WeatherPanel } from "./WeatherPanel";
+
+// Persisted across restarts so the kitchen Mac keeps the chosen wake-word mic.
+// Empty string means "let the OS pick the default input".
+const MIC_DEVICE_STORAGE_KEY = "familyhub.micDeviceId";
+
+function loadSavedMicId(): string {
+  try {
+    return window.localStorage.getItem(MIC_DEVICE_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function saveMicId(deviceId: string): void {
+  try {
+    if (deviceId) {
+      window.localStorage.setItem(MIC_DEVICE_STORAGE_KEY, deviceId);
+    } else {
+      window.localStorage.removeItem(MIC_DEVICE_STORAGE_KEY);
+    }
+  } catch {
+    // localStorage unavailable (private mode / disabled) — the choice just
+    // won't survive a restart, which is acceptable.
+  }
+}
 
 const emptySnapshot: AssistantSnapshot = {
   config: {
@@ -31,8 +57,31 @@ export function App(): React.JSX.Element {
   const [liveOutput, setLiveOutput] = useState("");
   const [focusedPanel, setFocusedPanel] = useState<DashboardPanel>(null);
   const [reminderList, setReminderList] = useState<string | null>(null);
-  const micStartedRef = useRef(false);
+  const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
+  const [micDeviceId, setMicDeviceId] = useState<string>(loadSavedMicId);
   const playerRef = useRef<AudioPlayer | null>(null);
+
+  // Device labels are only populated once a getUserMedia grant has happened, so
+  // this is also called from the capture loop's onReady (not just on mount).
+  const refreshAudioInputs = useCallback(async (): Promise<void> => {
+    if (!navigator.mediaDevices?.enumerateDevices) {
+      return;
+    }
+
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      setAudioInputs(
+        devices.filter((device) => device.kind === "audioinput" && device.deviceId),
+      );
+    } catch {
+      // Enumeration is best-effort; the dropdown just stays on its last list.
+    }
+  }, []);
+
+  const handleMicChange = useCallback((deviceId: string): void => {
+    setMicDeviceId(deviceId);
+    saveMicId(deviceId);
+  }, []);
 
   useEffect(() => {
     window.familyHub.assistant
@@ -101,24 +150,40 @@ export function App(): React.JSX.Element {
     void runAction(() => window.familyHub.assistant.startListening());
   }, [autoStartAttempted, snapshot.isListening]);
 
+  // Mic capture must keep running (it streams frames to the wake listener), but
+  // there's no meter UI anymore — only surface a hard failure to the banner.
+  // Re-runs when the chosen input changes so the new device takes over.
   useEffect(() => {
-    if (micStartedRef.current) {
-      return;
-    }
-
-    micStartedRef.current = true;
-    // Mic capture must keep running (it streams frames to the wake listener), but
-    // there's no meter UI anymore — only surface a hard failure to the banner.
     const cleanup = startMicrophoneLoop({
+      deviceId: micDeviceId,
       onError: setErrorMessage,
       onLevel: () => {},
-      onReady: () => {},
+      // Labels are available now that the mic is granted — refresh so the
+      // dropdown shows real device names instead of "Microphone N".
+      onReady: () => void refreshAudioInputs(),
+      // The saved device vanished and we fell back to the default; reflect that
+      // in the dropdown rather than leaving a dead selection.
+      onDeviceUnavailable: () => handleMicChange(""),
     });
 
     return () => {
       void cleanup.then((stop) => stop());
     };
-  }, []);
+  }, [micDeviceId, refreshAudioInputs, handleMicChange]);
+
+  // Keep the input list fresh as devices are plugged/unplugged.
+  useEffect(() => {
+    void refreshAudioInputs();
+
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices?.addEventListener) {
+      return undefined;
+    }
+
+    const handler = (): void => void refreshAudioInputs();
+    mediaDevices.addEventListener("devicechange", handler);
+    return () => mediaDevices.removeEventListener("devicechange", handler);
+  }, [refreshAudioInputs]);
 
   useEffect(() => {
     window.familyHub.dashboard
@@ -177,6 +242,16 @@ export function App(): React.JSX.Element {
 
   return (
     <div className={sessionActive ? "kiosk kiosk--live" : "kiosk"}>
+      {/* Seamless top-left corner (clears the inset traffic lights): pick which
+          microphone listens for the wake word. */}
+      <div className="mic-corner">
+        <MicPicker
+          devices={audioInputs}
+          onChange={handleMicChange}
+          selectedDeviceId={micDeviceId}
+        />
+      </div>
+
       {/* Seamless top-right corner: shows only when an update is actionable. */}
       <div className="update-corner">
         <UpdateControl />
@@ -415,10 +490,14 @@ function isAssistantSnapshot(value: unknown): value is AssistantSnapshot {
 }
 
 async function startMicrophoneLoop({
+  deviceId,
   onLevel,
   onError,
   onReady,
+  onDeviceUnavailable,
 }: {
+  deviceId?: string;
+  onDeviceUnavailable?: () => void;
   onError: (message: string) => void;
   onLevel: (level: number) => void;
   onReady: (sampleRate: number) => void;
@@ -428,19 +507,26 @@ async function startMicrophoneLoop({
     return () => {};
   }
 
+  const audioConstraints: MediaTrackConstraints = {
+    autoGainControl: true,
+    channelCount: 1,
+    echoCancellation: true,
+    // OFF: Chrome's noise suppression eats the soft consonants of casual
+    // far-field speech — exactly the "Hey James" said from across the
+    // kitchen — and the wake model + Stage-2 ASRs all handle raw room
+    // audio better than processed audio. Keep echoCancellation (barge-in
+    // while James speaks) and AGC (lifts quiet far speech).
+    noiseSuppression: false,
+  };
+
+  // Pin to the chosen input; omit entirely to take the OS default.
+  if (deviceId) {
+    audioConstraints.deviceId = { exact: deviceId };
+  }
+
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        autoGainControl: true,
-        channelCount: 1,
-        echoCancellation: true,
-        // OFF: Chrome's noise suppression eats the soft consonants of casual
-        // far-field speech — exactly the "Hey James" said from across the
-        // kitchen — and the wake model + Stage-2 ASRs all handle raw room
-        // audio better than processed audio. Keep echoCancellation (barge-in
-        // while James speaks) and AGC (lifts quiet far speech).
-        noiseSuppression: false,
-      },
+      audio: audioConstraints,
     });
     const AudioContextConstructor =
       window.AudioContext ?? window.webkitAudioContext;
@@ -497,6 +583,14 @@ async function startMicrophoneLoop({
       void audioContext.close();
     };
   } catch (error) {
+    // A pinned device that's been unplugged throws here. Don't leave the
+    // kitchen without a wake word: drop the selection and retry on the default.
+    if (deviceId) {
+      onError("Selected microphone unavailable — using the default.");
+      onDeviceUnavailable?.();
+      return () => {};
+    }
+
     onError(`Microphone blocked: ${readErrorMessage(error)}`);
     return () => {};
   }

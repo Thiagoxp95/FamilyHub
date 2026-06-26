@@ -2075,6 +2075,70 @@ body.hub-modal-open {
   pointer-events: auto;
 }
 
+/* Wake-word mic picker: mirror of the update badge on the opposite corner.
+   Offset past the inset macOS traffic lights so it never sits under them. */
+.mic-corner {
+  position: fixed;
+  inset-block-start: 0;
+  inset-inline-start: 84px;
+  z-index: 30;
+  block-size: 28px;
+  align-items: center;
+  display: flex;
+  pointer-events: none;
+}
+
+.mic-corner > * {
+  pointer-events: auto;
+}
+
+.mic-badge {
+  -webkit-app-region: no-drag;
+  align-items: center;
+  background: transparent;
+  border-radius: 5px;
+  color: var(--hub-text-2, #5b6b6d);
+  cursor: pointer;
+  display: inline-flex;
+  gap: 4px;
+  height: 18px;
+  opacity: 0.7;
+  padding: 0 4px;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+
+.mic-badge:hover {
+  background: var(--hub-glass-2, rgba(38, 53, 56, 0.06));
+  opacity: 1;
+}
+
+.mic-badge__glyph {
+  display: inline-flex;
+  flex: none;
+}
+
+.mic-badge__select {
+  -webkit-app-region: no-drag;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  max-width: 132px;
+  outline: none;
+  padding: 0;
+  text-overflow: ellipsis;
+}
+
+/* The native popup menu paints on a light surface, so force readable text. */
+.mic-badge__select option {
+  color: #11181b;
+}
+
 .version-badge {
   -webkit-app-region: no-drag;
   align-items: center;
