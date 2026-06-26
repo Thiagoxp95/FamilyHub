@@ -83,6 +83,43 @@ export function App(): React.JSX.Element {
     saveMicId(deviceId);
   }, []);
 
+  // Bumping this forces the capture effect to tear down and rebuild the whole
+  // getUserMedia → AudioContext graph, even when the device id is unchanged.
+  // That's the load-bearing recovery: a clamshell lid-close swaps the default
+  // output device that clocks the capture context, killing it with the input
+  // mic still "live", so re-picking the same mic (a no-op) can't recover it.
+  const [captureEpoch, setCaptureEpoch] = useState(0);
+  const restartTimerRef = useRef<number | undefined>(undefined);
+  // Consecutive stalls with no recovery → exponential backoff on the watchdog
+  // so a setup with no working audio output (clamshell + a monitor with no
+  // speakers) can't rebuild the capture graph forever in a tight loop. Reset
+  // the moment a rebuilt loop produces audio (onHealthy).
+  const stallCountRef = useRef(0);
+  // Coalesce restart triggers (the watchdog and a lost input track can both
+  // fire) into a single debounced rebuild.
+  const restartCapture = useCallback((): void => {
+    if (restartTimerRef.current !== undefined) {
+      window.clearTimeout(restartTimerRef.current);
+    }
+    restartTimerRef.current = window.setTimeout(() => {
+      restartTimerRef.current = undefined;
+      stallCountRef.current += 1;
+      setCaptureEpoch((epoch) => epoch + 1);
+    }, 400);
+  }, []);
+  const markCaptureHealthy = useCallback((): void => {
+    stallCountRef.current = 0;
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (restartTimerRef.current !== undefined) {
+        window.clearTimeout(restartTimerRef.current);
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     window.familyHub.assistant
       .getSnapshot()
@@ -154,6 +191,13 @@ export function App(): React.JSX.Element {
   // there's no meter UI anymore — only surface a hard failure to the banner.
   // Re-runs when the chosen input changes so the new device takes over.
   useEffect(() => {
+    // Back off the watchdog after repeated failed rebuilds: 3s, 6s, 12s … 60s.
+    // Resets to 3s as soon as a rebuilt loop produces audio (markCaptureHealthy).
+    const stallTimeoutMs = Math.min(
+      3000 * 2 ** stallCountRef.current,
+      60000,
+    );
+
     const cleanup = startMicrophoneLoop({
       deviceId: micDeviceId,
       onError: setErrorMessage,
@@ -164,12 +208,24 @@ export function App(): React.JSX.Element {
       // The saved device vanished and we fell back to the default; reflect that
       // in the dropdown rather than leaving a dead selection.
       onDeviceUnavailable: () => handleMicChange(""),
+      // Capture stalled mid-stream (clamshell output-device swap killed the
+      // context, or the input track died) — rebuild the graph.
+      onStall: restartCapture,
+      onHealthy: markCaptureHealthy,
+      stallTimeoutMs,
     });
 
     return () => {
       void cleanup.then((stop) => stop());
     };
-  }, [micDeviceId, refreshAudioInputs, handleMicChange]);
+  }, [
+    micDeviceId,
+    captureEpoch,
+    refreshAudioInputs,
+    handleMicChange,
+    restartCapture,
+    markCaptureHealthy,
+  ]);
 
   // Keep the input list fresh as devices are plugged/unplugged.
   useEffect(() => {
@@ -180,6 +236,11 @@ export function App(): React.JSX.Element {
       return undefined;
     }
 
+    // Keep the dropdown list fresh only. Do NOT rebuild capture here: a
+    // clamshell lid-close kills the output device that clocks the context, but
+    // so does any benign topology change (AirPods, a USB DAC), and rebuilding
+    // on every event causes periodic wake gaps. The liveness watchdog inside
+    // startMicrophoneLoop detects the actual stall and rebuilds (with backoff).
     const handler = (): void => void refreshAudioInputs();
     mediaDevices.addEventListener("devicechange", handler);
     return () => mediaDevices.removeEventListener("devicechange", handler);
@@ -489,18 +550,32 @@ function isAssistantSnapshot(value: unknown): value is AssistantSnapshot {
   );
 }
 
-async function startMicrophoneLoop({
+export async function startMicrophoneLoop({
   deviceId,
   onLevel,
   onError,
   onReady,
   onDeviceUnavailable,
+  onStall,
+  onHealthy,
+  stallTimeoutMs = 3000,
 }: {
   deviceId?: string;
   onDeviceUnavailable?: () => void;
   onError: (message: string) => void;
   onLevel: (level: number) => void;
   onReady: (sampleRate: number) => void;
+  // Called when capture stalls mid-stream (output device that clocks the
+  // AudioContext died on a clamshell lid-close, or the input track ended/muted).
+  // The owner rebuilds the whole graph — recovery can't be done in place.
+  onStall?: () => void;
+  // Fired once the first audio callback actually arrives, i.e. this loop is
+  // producing frames. The owner uses it to reset stall backoff.
+  onHealthy?: () => void;
+  // How long with no audio callback before the watchdog declares a stall. The
+  // owner grows this (backoff) across consecutive stalls so a setup with no
+  // working audio output never busy-loops rebuilding.
+  stallTimeoutMs?: number;
 }): Promise<() => void> {
   if (!navigator.mediaDevices?.getUserMedia) {
     onError("Microphone unavailable");
@@ -524,26 +599,72 @@ async function startMicrophoneLoop({
     audioConstraints.deviceId = { exact: deviceId };
   }
 
+  // Hoisted so a throw mid-setup (e.g. `new AudioContext` failing during an
+  // unstable CoreAudio route transition) can still tear down whatever was
+  // created — otherwise a leaked stream/AudioContext eventually trips
+  // Chromium's per-page context cap and bricks wake permanently on a device
+  // that can't be hand-fixed.
+  let stream: MediaStream | undefined;
+  let audioContext: AudioContext | undefined;
+  let micTrack: MediaStreamTrack | undefined;
+  let watchdogId: number | undefined;
+  const handleTrackLost = (): void => onStall?.();
+  let handleStateChange: (() => void) | undefined;
+
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
+    stream = await navigator.mediaDevices.getUserMedia({
       audio: audioConstraints,
     });
+
+    // If the OS resets the input (CoreAudio HAL reset on a lid/power
+    // transition, or a genuine unplug), the track ends/mutes while the rest of
+    // the graph looks healthy. Rebuild rather than going deaf.
+    [micTrack] = stream.getAudioTracks();
+    micTrack?.addEventListener("ended", handleTrackLost);
+    micTrack?.addEventListener("mute", handleTrackLost);
+
     const AudioContextConstructor =
       window.AudioContext ?? window.webkitAudioContext;
-    const audioContext = new AudioContextConstructor({
+    audioContext = new AudioContextConstructor({
       sampleRate: captureSampleRate,
     });
-    const source = audioContext.createMediaStreamSource(stream);
+    const ctx = audioContext;
+
+    // The capture context (unlike the playback one) was never resumed. A
+    // context created while the page is briefly occluded — or interrupted by an
+    // audio-route change — can sit "suspended" forever, so resume on creation
+    // and again whenever it slips back to suspended.
+    void ctx.resume().catch(() => {});
+    handleStateChange = (): void => {
+      if (ctx.state === "suspended") {
+        void ctx.resume().catch(() => {});
+      }
+    };
+    ctx.addEventListener("statechange", handleStateChange);
+
+    const source = ctx.createMediaStreamSource(stream);
     // 1024 samples @ 16 kHz = 64 ms callbacks. The previous 4096 (256 ms)
     // buffer added ~190 ms average delay before audio even reached the wake
     // sidecar — a big slice of the perceived wake latency.
-    const processor = audioContext.createScriptProcessor(1024, 1, 1);
-    const mutedOutput = audioContext.createGain();
+    const processor = ctx.createScriptProcessor(1024, 1, 1);
+    const mutedOutput = ctx.createGain();
     let pendingSamples: number[] = [];
     let smoothedLevel = 0;
+    // Liveness, not loudness: a silent kitchen still fires onaudioprocess. When
+    // the lid closes in clamshell the default OUTPUT device that clocks this
+    // context can die — onaudioprocess stops with NO statechange — so the only
+    // reliable signal is "callbacks stopped arriving".
+    let lastCallbackAt = Date.now();
+    let stalled = false;
+    let healthy = false;
 
     mutedOutput.gain.value = 0;
     processor.onaudioprocess = (event) => {
+      lastCallbackAt = Date.now();
+      if (!healthy) {
+        healthy = true;
+        onHealthy?.();
+      }
       const channel = event.inputBuffer.getChannelData(0);
 
       for (const sample of channel) {
@@ -557,7 +678,7 @@ async function startMicrophoneLoop({
 
     source.connect(processor);
     processor.connect(mutedOutput);
-    mutedOutput.connect(audioContext.destination);
+    mutedOutput.connect(ctx.destination);
 
     // The main process is always listening (local Parakeet) and decides what to
     // buffer/forward, so the renderer streams every frame unconditionally.
@@ -572,17 +693,51 @@ async function startMicrophoneLoop({
       window.familyHub.assistant.sendMicFrame(int16ToBase64(pcm));
     }, 60);
 
-    onReady(audioContext.sampleRate);
+    // Fire onStall once if the audio render thread stops pulling frames. The
+    // owner tears this loop down (clearing this watchdog) and rebuilds against
+    // the now-current default output device. stallTimeoutMs grows on repeated
+    // stalls (owner-driven backoff) so a no-audio-output setup can't busy-loop.
+    watchdogId = window.setInterval(() => {
+      if (!stalled && Date.now() - lastCallbackAt > stallTimeoutMs) {
+        stalled = true;
+        onStall?.();
+      }
+    }, 1000);
+
+    onReady(ctx.sampleRate);
 
     return () => {
       window.clearInterval(intervalId);
+      if (watchdogId !== undefined) {
+        window.clearInterval(watchdogId);
+      }
+      if (handleStateChange) {
+        ctx.removeEventListener("statechange", handleStateChange);
+      }
+      micTrack?.removeEventListener("ended", handleTrackLost);
+      micTrack?.removeEventListener("mute", handleTrackLost);
       processor.disconnect();
       mutedOutput.disconnect();
       source.disconnect();
-      stream.getTracks().forEach((track) => track.stop());
-      void audioContext.close();
+      stream?.getTracks().forEach((track) => track.stop());
+      void ctx.close().catch(() => {});
     };
   } catch (error) {
+    // Best-effort teardown of anything created before the throw, then return a
+    // no-op (never rethrow — the caller relies on always getting a stop fn).
+    if (watchdogId !== undefined) {
+      window.clearInterval(watchdogId);
+    }
+    if (audioContext && handleStateChange) {
+      audioContext.removeEventListener("statechange", handleStateChange);
+    }
+    micTrack?.removeEventListener("ended", handleTrackLost);
+    micTrack?.removeEventListener("mute", handleTrackLost);
+    if (audioContext && audioContext.state !== "closed") {
+      void audioContext.close().catch(() => {});
+    }
+    stream?.getTracks().forEach((track) => track.stop());
+
     // A pinned device that's been unplugged throws here. Don't leave the
     // kitchen without a wake word: drop the selection and retry on the default.
     if (deviceId) {

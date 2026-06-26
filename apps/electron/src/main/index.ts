@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   ipcMain,
+  powerSaveBlocker,
   session,
   shell,
   systemPreferences,
@@ -35,6 +36,12 @@ function createMainWindow(): void {
     title: "FamilyHub",
     width: 900,
     webPreferences: {
+      // 24/7 wake-word hub: defense-in-depth so the renderer's mic flush timer
+      // is never throttled if the window is ever genuinely occluded/minimized.
+      // (The clamshell wake stall itself is an output-device-clock failure
+      // handled in the renderer, not a throttling issue — the window stays
+      // visible on the external monitor.)
+      backgroundThrottling: false,
       contextIsolation: true,
       nodeIntegration: false,
       preload: join(currentDir, "../preload/index.cjs"),
@@ -58,6 +65,10 @@ function createMainWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  // Always-on kitchen hub: keep the app fully scheduled even when every window
+  // is occluded (lid closed in clamshell), so macOS App Nap never suspends the
+  // wake pipeline. 'prevent-app-suspension' does NOT keep the display awake.
+  powerSaveBlocker.start("prevent-app-suspension");
   configureMediaPermissions(session.defaultSession);
   await requestMicrophoneAccess({ systemPreferences });
   ipcMain.handle("app:ping", () => "pong");
