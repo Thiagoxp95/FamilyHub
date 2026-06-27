@@ -38,6 +38,24 @@ CASES = [
 ]
 
 
+PHONETIC_CASES = [
+    # (label, text, tokens, expected)
+    # jaimz: substitution y→i from alias "jaymz" — NOT in WAKE_TOKEN_ALIASES
+    ("jaimz accepted (edit1 of jaymz)", "hey jaimz", ["james"], True),
+    # jamesz: insertion of z after alias "james" — NOT in WAKE_TOKEN_ALIASES
+    ("jamesz accepted (edit1 of james)", "okay jamesz", ["james"], True),
+    # existing exact alias — must still work
+    ("james exact still ok", "hey james", ["james"], True),
+    # denylist guards: these ARE within edit-dist 1 of an alias but must be rejected
+    ("games rejected (cames confusable)", "hey games", ["james"], False),
+    ("came rejected", "he came home", ["james"], False),
+    ("cames rejected", "hey cames", ["james"], False),
+    # whole-word boundary: jameson is 7 chars, >1 edit from any 5-6 char alias
+    ("jameson rejected (whole-word, not substr)", "jameson whiskey", ["james"], False),
+    ("dreams rejected", "tie dreams", ["james"], False),
+]
+
+
 def test_text_match():
     # exact
     assert text_contains_wake_token("hey james", ["james"]) is True
@@ -78,6 +96,11 @@ def main():
     except AssertionError as exc:
         print(f"FAIL test_text_match: {exc}")
         ok = False
+    for label, text, tokens, expected in PHONETIC_CASES:
+        got = text_contains_wake_token(text, tokens)
+        ok_case = got == expected
+        print(f"[{'PASS' if ok_case else 'FAIL'}] {label} (got {got})")
+        ok &= ok_case
     return 0 if ok else 1
 
 

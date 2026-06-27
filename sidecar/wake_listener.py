@@ -132,11 +132,49 @@ WAKE_TOKEN_ALIASES = {
 # "pyjames" still do not match because their prefix is not a known filler.
 WAKE_GLUE_PREFIXES = ("a", "the", "hey", "hi", "he", "uh", "oh", "i")
 
+# Whole words that are within one edit of "james"/its aliases but are KNOWN
+# confusables we must never accept — the cames/games family Stage 1 + this
+# denylist together keep rejected (see measure_cames.py evidence).
+WAKE_CONFUSABLE_DENYLIST = frozenset(
+    {"games", "game", "came", "cames", "dreams", "jane", "jason", "names", "shame", "james bond"}
+)
+
+
+def _within_edit1(a, b):
+    """True iff Levenshtein(a, b) <= 1. Tiny, allocation-light (words are short)."""
+    if a == b:
+        return True
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 1:
+        return False
+    if la == lb:  # one substitution
+        return sum(1 for x, y in zip(a, b) if x != y) == 1
+    # one insertion/deletion: the shorter must embed in the longer with one gap
+    if la > lb:
+        a, b, la, lb = b, a, lb, la
+    i = j = 0
+    skipped = False
+    while i < la and j < lb:
+        if a[i] == b[j]:
+            i += 1
+            j += 1
+        elif skipped:
+            return False
+        else:
+            skipped = True
+            j += 1
+    return True
+
 
 def text_contains_wake_token(text, distinctive_tokens):
     """True iff any distinctive token (or a curated alias of it) appears as a
     WHOLE word in a free-decode transcript. Whole-word, not substring, so
     'jameson'/'names' do not match.
+
+    Also accepts whole words within Levenshtein edit-distance 1 of any alias,
+    unless the word is in WAKE_CONFUSABLE_DENYLIST. This recovers genuine
+    wakes where a tiny ASR mis-spells "james" by one character (e.g. "jaimz")
+    while the denylist keeps the cames/games confusable family rejected.
 
     `distinctive_tokens` must be CANONICAL keys as they appear in
     WAKE_TOKEN_ALIASES (e.g. "james"), NOT aliases such as "jaymes".
@@ -157,13 +195,22 @@ def text_contains_wake_token(text, distinctive_tokens):
     )
     words = set(normalized.split())
     for token in distinctive_tokens:
-        for alias in WAKE_TOKEN_ALIASES.get(token, (token,)):
+        aliases = WAKE_TOKEN_ALIASES.get(token, (token,))
+        for alias in aliases:
             if alias in words:
                 return True
             # Recover space-dropped glues ("ajames" = "a" + "james").
             for prefix in WAKE_GLUE_PREFIXES:
                 if (prefix + alias) in words:
                     return True
+        # Conservative phonetic recovery: a whole word one edit from any alias,
+        # excluding known confusables. Catches ASR mis-spellings of a real
+        # "james" without reopening the cames/games hole.
+        for word in words:
+            if word in WAKE_CONFUSABLE_DENYLIST:
+                continue
+            if any(_within_edit1(word, alias) for alias in aliases):
+                return True
     return False
 
 
