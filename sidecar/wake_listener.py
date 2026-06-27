@@ -45,6 +45,12 @@ Knobs:
                                    (skipped from the chain if the dir is absent)
   FAMILYHUB_VOSK_MODEL           — path to the Vosk model used as the final
                                    free-decode verifier (skipped if absent)
+  FAMILYHUB_WAKE_AGC             — "1"/on (default) runs the VAD-gated RMS-AGC
+                                   front-end before Stage 1 and on the Stage-2
+                                   tail; "0"/off/false/no disables it
+  FAMILYHUB_WAKE_AGC_TARGET_RMS  — AGC target RMS (default 2000)
+  FAMILYHUB_WAKE_AGC_MAX_GAIN    — AGC max gain (default 8)
+  FAMILYHUB_WAKE_AGC_VAD_FLOOR   — RMS below which gain relaxes to unity (default 120)
 
 Protocol (newline-delimited over stdio):
   stdin  : base64(int16 LINEAR16 @ 16 kHz mono) per line; OR a JSON control line
@@ -91,6 +97,24 @@ def dlog(message):
 def emit(message):
     sys.stdout.write(json.dumps(message) + "\n")
     sys.stdout.flush()
+
+
+def _env_truthy(name, default):
+    return os.environ.get(name, default).strip().lower() not in ("0", "off", "false", "no")
+
+
+def make_conditioner_from_env():
+    """Build the Stage-1/Stage-2 AGC conditioner from env, or None if disabled.
+    FAMILYHUB_WAKE_AGC defaults ON (recall-first); set 0/off/false/no to disable."""
+    if not _env_truthy("FAMILYHUB_WAKE_AGC", "1"):
+        return None
+    from audio_frontend import WakeBandConditioner
+
+    return WakeBandConditioner(
+        target_rms=float(os.environ.get("FAMILYHUB_WAKE_AGC_TARGET_RMS", "2000")),
+        max_gain=float(os.environ.get("FAMILYHUB_WAKE_AGC_MAX_GAIN", "8")),
+        vad_floor_rms=float(os.environ.get("FAMILYHUB_WAKE_AGC_VAD_FLOOR", "120")),
+    )
 
 
 def phrase_confirmed(words, phrase_tokens, min_confidence):
@@ -175,12 +199,13 @@ class OpenWakeWordEngine:
     FRAME = 1280  # 80 ms @ 16 kHz
     COOLDOWN_FRAMES = 25  # ~2 s — don't re-fire on the same utterance
 
-    def __init__(self, model_path, threshold):
+    def __init__(self, model_path, threshold, conditioner=None):
         from openwakeword.model import Model
 
         self.model = Model(wakeword_models=[model_path], inference_framework="onnx")
         self.model_path = model_path
         self.threshold = threshold
+        self.conditioner = conditioner
         self.last_fire_score = 0.0  # score of the most recent FIRED frame
         self._leftover = np.zeros(0, dtype=np.int16)
         self._cooldown = 0
@@ -201,6 +226,8 @@ class OpenWakeWordEngine:
         self._leftover = np.zeros(0, dtype=np.int16)
         self._cooldown = 0
         self._peak = 0.0
+        if self.conditioner is not None:
+            self.conditioner.reset()
 
     def feed(self, pcm_bytes):
         chunk = np.frombuffer(pcm_bytes, dtype=np.int16)
@@ -209,6 +236,8 @@ class OpenWakeWordEngine:
         while len(self._leftover) >= self.FRAME:
             frame = self._leftover[: self.FRAME]
             self._leftover = self._leftover[self.FRAME :]
+            if self.conditioner is not None:
+                frame = self.conditioner.process(frame)
             # Predict EVERY frame to keep openWakeWord's internal buffers warm,
             # even while cooling down.
             scores = self.model.predict(frame)
@@ -392,8 +421,9 @@ class TwoStageEngine:
     # saves the post-trigger wait + decode (~0.5 s) on clear wakes.
     DEFAULT_S1_BYPASS = 0.90
 
-    def __init__(self, model_path, threshold, confirmer, confirm_tokens):
-        self.stage1 = OpenWakeWordEngine(model_path, threshold)
+    def __init__(self, model_path, threshold, confirmer, confirm_tokens, conditioner=None):
+        self.stage1 = OpenWakeWordEngine(model_path, threshold, conditioner=conditioner)
+        self.conditioner = conditioner
         self.confirmer = confirmer
         self.confirm_tokens = confirm_tokens
         post_trigger_ms = float(
@@ -431,6 +461,8 @@ class TwoStageEngine:
         # that hides the word. The verifiers decode the tail fast; the word always lands here.
         tail = list(self.ring)[-self.CONFIRM_DECODE_FRAMES :]
         audio = np.concatenate(tail).astype(np.int16)
+        if self.conditioner is not None:
+            audio = self.conditioner.process(audio)
         confirmed, heard = self.confirmer.confirm(audio, self.confirm_tokens)
         # Record what Stage 2 heard so a veto is diagnosable.
         self._last_heard = f"heard: {heard}"
@@ -516,10 +548,11 @@ def build_engine(args, wake_words):
         if os.path.isdir(vosk_dir):
             verifiers.append(VoskFreeConfirmer(vosk_dir))
         confirmer = ChainConfirmer(verifiers)
-    engine = TwoStageEngine(model, args.threshold, confirmer, confirm_tokens)
+    conditioner = make_conditioner_from_env()
+    engine = TwoStageEngine(model, args.threshold, confirmer, confirm_tokens, conditioner=conditioner)
     description = (
         f"twostage: emit='{args.wake_phrase}' confirm={confirm_tokens} "
-        f"s1={args.threshold} bypass={engine.s1_bypass} "
+        f"s1={args.threshold} bypass={engine.s1_bypass} agc={'on' if conditioner else 'off'} "
         + (
             "(openWakeWord→" + "→".join(v.name for v in confirmer.verifiers) + ")"
             if stage2_on
