@@ -906,6 +906,9 @@ import os
 import sys
 import numpy as np
 
+# Disable the high-confidence bypass so a clean "hey James" (~0.99 on Stage 1)
+# traverses the Stage-2 / OR-rule path instead of firing instantly at bypass=0.90.
+os.environ["FAMILYHUB_WAKE_S1_BYPASS"] = "1.1"
 import wake_listener as wl
 
 SR = 16000
