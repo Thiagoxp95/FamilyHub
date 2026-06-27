@@ -209,8 +209,15 @@ def _engine_threshold(engine):
 def classify_clip(engine, audio_int16):
     """Feed one clip; return (reason, peak_score, heard).
     reason ∈ {"fired","stage2_veto","stage1_nofire"}.
-    A non-fire is a stage-2 veto iff stage-1's observed peak crossed threshold."""
+
+    For the real TwoStageEngine, a non-fire is a stage-2 veto iff the engine's
+    cumulative `rejected` counter advanced during THIS clip. This is the robust
+    signal: the engine zeroes stage1._peak on a fire (see OpenWakeWordEngine.feed),
+    so peak alone cannot distinguish a vetoed fire from a never-fired clip, and
+    `_last_heard` persists across clips. Fakes without a `rejected` counter fall
+    back to heard/peak."""
     engine.reset()
+    rejected_before = getattr(engine, "rejected", None)
     pre = np.zeros(SR // 2, dtype=np.int16)
     post = np.zeros(2 * SR, dtype=np.int16)
     stream = np.concatenate([pre, audio_int16, post])
@@ -229,7 +236,12 @@ def classify_clip(engine, audio_int16):
     heard = getattr(engine, "_last_heard", "") or ""
     if fired:
         return "fired", peak, heard
-    if peak >= _engine_threshold(engine):
+    if rejected_before is not None:  # real engine: trust the veto counter
+        if engine.rejected > rejected_before:
+            return "stage2_veto", peak, heard
+        return "stage1_nofire", peak, ""
+    # fake/other engine without a reject counter: peak/heard fallback
+    if heard or peak >= _engine_threshold(engine):
         return "stage2_veto", peak, heard
     return "stage1_nofire", peak, heard
 
