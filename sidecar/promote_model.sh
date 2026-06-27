@@ -28,6 +28,7 @@ if [ ! -f "$NEW" ]; then echo "no such file: $NEW" >&2; exit 1; fi
 echo "== baseline bench (current model) =="
 BASE_JSON="$("$PY" "$HERE/wake_bench.py" 2>/dev/null | tail -1)"
 BASE_RECALL="$("$PY" -c "import json,sys; print(json.loads(sys.argv[1])['recall'])" "$BASE_JSON")"
+if [ -z "$BASE_RECALL" ]; then echo "bench parse failed (baseline) — refusing to promote" >&2; exit 3; fi
 
 # Swap in the new model behind a backup.
 [ -f "$LIVE" ] && cp "$LIVE" "$BACKUP"
@@ -38,6 +39,11 @@ NEW_JSON="$("$PY" "$HERE/wake_bench.py" 2>/dev/null | tail -1)"
 NEW_RECALL="$("$PY" -c "import json,sys; print(json.loads(sys.argv[1])['recall'])" "$NEW_JSON")"
 NEW_FWPH="$("$PY" -c "import json,sys; print(json.loads(sys.argv[1])['false_wakes_per_hour'])" "$NEW_JSON")"
 BUDGET="${FAMILYHUB_WAKE_FP_BUDGET:-0.5}"
+if [ -z "$NEW_RECALL" ] || [ -z "$NEW_FWPH" ]; then
+  echo "bench parse failed (candidate) — reverting" >&2
+  if [ -f "$BACKUP" ]; then cp "$BACKUP" "$LIVE"; else echo "WARN: no backup to revert to; candidate left live" >&2; fi
+  exit 3
+fi
 
 KEEP="$("$PY" -c "print(1 if ($NEW_RECALL >= $BASE_RECALL and $NEW_FWPH <= $BUDGET) else 0)")"
 if [ "$KEEP" = "1" ]; then
@@ -45,6 +51,6 @@ if [ "$KEEP" = "1" ]; then
   exit 0
 fi
 # Revert.
-[ -f "$BACKUP" ] && cp "$BACKUP" "$LIVE"
+if [ -f "$BACKUP" ]; then cp "$BACKUP" "$LIVE"; else echo "WARN: no backup to revert to; rejected model left live" >&2; fi
 echo "REJECTED: recall $BASE_RECALL -> $NEW_RECALL, fw/h $NEW_FWPH (budget $BUDGET). reverted." >&2
 exit 2

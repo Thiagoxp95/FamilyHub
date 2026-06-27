@@ -101,6 +101,9 @@ personalize for the appliance's owner + room:
 3. **Fold the corpus into the training set, then retrain** (training venv):
    `sidecar/training/.venv/bin/python sidecar/training/fold_owner_corpus.py`
    then `cd sidecar/training && ./run_full.sh`.
+   Idempotency is keyed on the destination filename, so re-recording a clip under
+   the *same* filename will be skipped — clear `my_custom_model/positive_clips/`
+   (and `adversarial_negative_clips/`) before re-folding refreshed recordings.
 4. **Promote behind the gate:**
    `sidecar/promote_model.sh sidecar/training/my_custom_model/hey_james.onnx`
    (promotes only if recall ≥ baseline and false-wakes/hour ≤ budget; else reverts).

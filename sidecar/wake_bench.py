@@ -205,7 +205,7 @@ def main():
             return 0
         print(f"RECOMMEND FAMILYHUB_WAKE_THRESHOLD={best['threshold']} "
               f"(recall={best['recall']:.2f}, fw/h={best['false_wakes_per_hour']})", file=sys.stderr)
-        print(json.dumps({"recommendation": best}, indent=1))
+        print(json.dumps({"recommendation": best}))
         return 0
 
     if args.roc:
@@ -214,7 +214,7 @@ def main():
             r = bench(pos, neg, real_engine_factory(thr))
             curve.append({"threshold": thr, "recall": r["recall"], "false_wakes_per_hour": r["false_wakes_per_hour"]})
             print(f"thr={thr:.2f} recall={r['recall']:.2f} fw/h={r['false_wakes_per_hour']}", file=sys.stderr)
-        print(json.dumps(curve, indent=1))
+        print(json.dumps(curve))
         return 0
 
     report = bench(pos, neg, real_engine_factory(args.threshold))
@@ -223,7 +223,7 @@ def main():
           f"= {report['false_wakes_per_hour']}/h", file=sys.stderr)
     for m in report["misses"]:
         print(f"  MISS {m['name']}: {m['reason']} peak={m['peak']} {m['heard']}", file=sys.stderr)
-    print(json.dumps(report, indent=1))
+    print(json.dumps(report))
     return 0
 
 
