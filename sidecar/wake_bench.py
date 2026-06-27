@@ -29,13 +29,14 @@ CORPUS = os.path.expanduser("~/.familyhub/wake-corpus")
 
 def load_wav(path):
     with wave.open(path, "rb") as w:
-        assert w.getframerate() == SR and w.getnchannels() == 1, path
+        if not (w.getframerate() == SR and w.getnchannels() == 1):
+            raise ValueError(path)
         return np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
 
 
 def say_pcm(text, voice=None):
-    aiff = tempfile.mktemp(suffix=".aiff")
-    wav = tempfile.mktemp(suffix=".wav")
+    aiff = tempfile.NamedTemporaryFile(suffix=".aiff", delete=False).name
+    wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
     try:
         cmd = ["say"]
         if voice:
@@ -105,10 +106,10 @@ def bench(positive_clips, negative_clips, make_engine):
     """positive_clips/negative_clips: list of (name, int16 audio).
     make_engine: zero-arg factory returning a fresh engine.
     Returns the report dict (see module/plan docstring)."""
+    engine = make_engine()
     fired = 0
     misses = []
     for name, audio in positive_clips:
-        engine = make_engine()
         reason, peak, heard = classify_clip(engine, audio)
         if reason == "fired":
             fired += 1
@@ -119,7 +120,6 @@ def bench(positive_clips, negative_clips, make_engine):
     neg_samples = 0
     for name, audio in negative_clips:
         neg_samples += len(audio)
-        engine = make_engine()
         reason, peak, heard = classify_clip(engine, audio)
         if reason == "fired":
             false_wakes += 1

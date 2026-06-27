@@ -26,7 +26,7 @@ class FakeEngine:
         self._peak_seen = peak
 
     def reset(self):
-        pass
+        self._done = False
 
     def feed(self, pcm_bytes):
         # Fire exactly once, on the first non-trivial chunk.
@@ -72,7 +72,6 @@ def run():
 
     # bench(): recall + false-wakes/hour math
     def make_fire(): return FakeEngine(True, 0.9, "moonshine='hey james'")
-    def make_quiet(): return FakeEngine(False, 0.1, "")
     # 2 positives (both fire), 1 negative clip of 2.0 s that fires once.
     pos = [("p1", np.zeros(16000, np.int16)), ("p2", np.zeros(16000, np.int16))]
     neg = [("n1", np.zeros(32000, np.int16))]  # 2.0 s @ 16 kHz
