@@ -39,6 +39,11 @@ Knobs:
                                    fires before handing off to Stage 2
   FAMILYHUB_WAKE_PHRASE          — full wake phrase to listen for
   FAMILYHUB_WAKE_CONFIRM_PHRASE  — word/alias Stage 2 must transcribe to confirm
+  FAMILYHUB_WAKE_S2_OR_SCORE     — Stage-1 score at/above which the wake fires
+                                   even if Stage-2 would veto (recall override).
+                                   Default 1.01 (OFF); enable only after the
+                                   personalized model widens the owner/noise
+                                   margin, tuned via `wake_bench.py --tune`.
   FAMILYHUB_WAKE_MODEL           — path to the openWakeWord ONNX model file
   FAMILYHUB_MOONSHINE_MODEL      — path to the sherpa-onnx Moonshine model
   FAMILYHUB_WHISPER_MODEL        — path to the sherpa-onnx Whisper tiny.en model
@@ -450,6 +455,9 @@ class TwoStageEngine:
         self.s1_bypass = float(
             os.environ.get("FAMILYHUB_WAKE_S1_BYPASS", self.DEFAULT_S1_BYPASS)
         )
+        self.s2_or_score = float(
+            os.environ.get("FAMILYHUB_WAKE_S2_OR_SCORE", "1.01")  # >1 ⇒ off by default
+        )
         self.rejected = 0
         self.reset()
 
@@ -461,6 +469,7 @@ class TwoStageEngine:
         )
         self._leftover = np.zeros(0, dtype=np.int16)
         self._collecting_samples = 0  # post-trigger samples to buffer before Stage 2
+        self._or_eligible = False
 
     def _push_ring(self, pcm_bytes):
         chunk = np.frombuffer(pcm_bytes, dtype=np.int16)
@@ -493,9 +502,13 @@ class TwoStageEngine:
             if self._collecting_samples <= 0:
                 self._collecting_samples = 0
                 self._last_heard = ""
-                if self._confirm():
-                    dlog(f"wake: stage-2 confirmed candidate — {self._last_heard}")
+                confirmed = self._confirm()
+                if confirmed or getattr(self, "_or_eligible", False):
+                    why = "confirmed" if confirmed else f"or-rule>={self.s2_or_score}"
+                    dlog(f"wake: stage-2 {why} candidate — {self._last_heard}")
+                    self._or_eligible = False
                     return True
+                self._or_eligible = False
                 self.rejected += 1
                 # Log to the debug FILE (not just stderr): a Stage-1 "FIRED" that
                 # Stage 2 then vetoes is the silent "I said it and nothing happened"
@@ -519,6 +532,7 @@ class TwoStageEngine:
                     f"score={self.stage1.last_fire_score:.3f} >= {self.s1_bypass} — waking"
                 )
                 return True
+            self._or_eligible = self.stage1.last_fire_score >= self.s2_or_score
             self._collecting_samples = self.post_trigger_samples  # collect rest of word
         return False
 

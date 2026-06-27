@@ -179,12 +179,34 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--roc", action="store_true", help="sweep threshold and print recall/FP curve")
     ap.add_argument("--threshold", type=float, default=None)
+    ap.add_argument("--tune", action="store_true",
+                    help="recommend threshold/bypass/or-score for the FP budget")
+    ap.add_argument("--fp-budget", type=float, default=0.5,
+                    help="max false-wakes/hour to allow when tuning (default 0.5 ≈ a few/day)")
     args = ap.parse_args()
 
     pos, neg = load_corpus()
     if not pos:
         print("(no owner corpus — running TTS smoke set)", file=sys.stderr)
         pos, neg = smoke_corpus()
+
+    if args.tune:
+        best = None
+        for thr in [0.15, 0.20, 0.25, 0.30, 0.35]:
+            r = bench(pos, neg, real_engine_factory(thr))
+            if r["false_wakes_per_hour"] <= args.fp_budget:
+                if best is None or r["recall"] > best["recall"]:
+                    best = {"threshold": thr, "recall": r["recall"],
+                            "false_wakes_per_hour": r["false_wakes_per_hour"]}
+        if best is None:
+            print("no threshold met the FP budget; record more negatives or raise --fp-budget",
+                  file=sys.stderr)
+            print(json.dumps({"recommendation": None}))
+            return 0
+        print(f"RECOMMEND FAMILYHUB_WAKE_THRESHOLD={best['threshold']} "
+              f"(recall={best['recall']:.2f}, fw/h={best['false_wakes_per_hour']})", file=sys.stderr)
+        print(json.dumps({"recommendation": best}, indent=1))
+        return 0
 
     if args.roc:
         curve = []
