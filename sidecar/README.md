@@ -50,6 +50,8 @@ engine with `FAMILYHUB_WAKE_ENGINE=vosk ./.venv/bin/python selftest.py`.
 See `training/README.md` for the reproducible recipe (Piper TTS positives + noise/
 negatives, ONNX export). For better real-room recall, fold in clips recorded on the
 appliance with `record_wake.py`.
+For the end-to-end owner personalization workflow (record → fold → retrain → gated
+promote → rollback) see `training/README.md` § *Personalizing on the owner's voice*.
 
 ## Protocol
 

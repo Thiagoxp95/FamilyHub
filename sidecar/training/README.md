@@ -87,3 +87,25 @@ misses, lower `FAMILYHUB_WAKE_THRESHOLD` and/or raise
 `FAMILYHUB_WAKE_POST_TRIGGER_MS` (recall-first: prefer a Stage-1 fire + Stage-2
 veto over a Stage-1 miss). `OpenWakeWordEngine` reads the score via
 `max(scores.values())`, so the ONNX internal model name does not matter.
+
+## Personalizing on the owner's voice (recall-first)
+
+The committed model is synthetic-only and misses some real voices/volumes. To
+personalize for the appliance's owner + room:
+
+1. **Record the corpus** (owner, near the USB mic):
+   `sidecar/.venv/bin/python sidecar/record_corpus.py`
+   → writes `~/.familyhub/wake-corpus/{positive,negative}/`.
+2. **Baseline the current model:** `sidecar/.venv/bin/python sidecar/wake_bench.py`
+   (note the recall + false-wakes/hour).
+3. **Fold the corpus into the training set, then retrain** (training venv):
+   `sidecar/training/.venv/bin/python sidecar/training/fold_owner_corpus.py`
+   then `cd sidecar/training && ./run_full.sh`.
+4. **Promote behind the gate:**
+   `sidecar/promote_model.sh sidecar/training/my_custom_model/hey_james.onnx`
+   (promotes only if recall ≥ baseline and false-wakes/hour ≤ budget; else reverts).
+5. **Re-bench + tune the operating point:**
+   `sidecar/.venv/bin/python sidecar/wake_bench.py --tune`
+   and set the recommended `FAMILYHUB_WAKE_THRESHOLD` (and, once the margin is
+   wide, `FAMILYHUB_WAKE_S2_OR_SCORE`).
+6. **Rollback any time:** `sidecar/promote_model.sh --rollback`.
