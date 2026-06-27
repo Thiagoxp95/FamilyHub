@@ -37,6 +37,13 @@ Knobs:
                                    immediately without Stage-2 confirmation
   FAMILYHUB_WAKE_POST_TRIGGER_MS — milliseconds of audio to buffer after Stage-1
                                    fires before handing off to Stage 2
+  FAMILYHUB_WAKE_PHONETIC        — "1"/on (default) lets the Stage-2 word check
+                                   accept whole words within one edit of an alias
+                                   (e.g. "jaimz"); "0"/"off"/"false"/"no" disables
+                                   ONLY that edit-distance generalization, leaving
+                                   exact-alias + glue-prefix matching intact. Read
+                                   per-call, so toggling it takes effect with no
+                                   restart.
   FAMILYHUB_WAKE_PHRASE          — full wake phrase to listen for
   FAMILYHUB_WAKE_CONFIRM_PHRASE  — word/alias Stage 2 must transcribe to confirm
   FAMILYHUB_WAKE_S2_OR_SCORE     — Stage-1 score at/above which the wake fires
@@ -140,8 +147,10 @@ WAKE_GLUE_PREFIXES = ("a", "the", "hey", "hi", "he", "uh", "oh", "i")
 # Whole words that are within one edit of "james"/its aliases but are KNOWN
 # confusables we must never accept — the cames/games family Stage 1 + this
 # denylist together keep rejected (see measure_cames.py evidence).
+# Single tokens only: this is matched against individual whole words, so a
+# multi-word entry could never fire.
 WAKE_CONFUSABLE_DENYLIST = frozenset(
-    {"games", "game", "came", "cames", "dreams", "jane", "jason", "names", "shame", "james bond"}
+    {"games", "game", "came", "cames", "dreams", "jane", "jason", "names", "shame"}
 )
 
 
@@ -179,7 +188,9 @@ def text_contains_wake_token(text, distinctive_tokens):
     Also accepts whole words within Levenshtein edit-distance 1 of any alias,
     unless the word is in WAKE_CONFUSABLE_DENYLIST. This recovers genuine
     wakes where a tiny ASR mis-spells "james" by one character (e.g. "jaimz")
-    while the denylist keeps the cames/games confusable family rejected.
+    while the denylist keeps the cames/games confusable family rejected. This
+    edit-distance generalization can be turned off with FAMILYHUB_WAKE_PHONETIC=0
+    (exact-alias + glue-prefix matching stay on).
 
     `distinctive_tokens` must be CANONICAL keys as they appear in
     WAKE_TOKEN_ALIASES (e.g. "james"), NOT aliases such as "jaymes".
@@ -195,6 +206,14 @@ def text_contains_wake_token(text, distinctive_tokens):
     upstream ASR is English-only, so non-ASCII characters will not appear in
     practice.
     """
+    # Kill-switch read PER CALL (not module-load) so a test or operator can
+    # toggle the edit-distance generalization without restarting the sidecar.
+    phonetic_on = os.environ.get("FAMILYHUB_WAKE_PHONETIC", "1").strip().lower() not in (
+        "0",
+        "off",
+        "false",
+        "no",
+    )
     normalized = "".join(
         c if (c.isalnum() or c.isspace()) else " " for c in text.lower()
     )
@@ -208,6 +227,10 @@ def text_contains_wake_token(text, distinctive_tokens):
             for prefix in WAKE_GLUE_PREFIXES:
                 if (prefix + alias) in words:
                     return True
+        if not phonetic_on:
+            # Edit-distance recovery disabled: only exact alias + glue prefixes
+            # above can match for this token.
+            continue
         # Conservative phonetic recovery: a whole word one edit from any alias,
         # excluding known confusables. Catches ASR mis-spellings of a real
         # "james" without reopening the cames/games hole.

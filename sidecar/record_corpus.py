@@ -12,6 +12,7 @@ Run from a terminal at your normal counter spot, near the USB mic:
     sidecar/.venv/bin/python sidecar/record_corpus.py negative   # just negatives
 """
 import os
+import re
 import sys
 import time
 
@@ -53,6 +54,25 @@ def clip_path(out_dir, index):
     return os.path.join(out_dir, f"clip_{index:06d}.wav")
 
 
+_CLIP_RE = re.compile(r"clip_(\d+)\.wav$")
+
+
+def next_index(out_dir):
+    """Next clip index = (max existing clip_NNNNNN.wav number) + 1, or 0 if none.
+
+    Parses the numeric suffix instead of counting files, so a resume after some
+    clips were deleted never re-uses a live number: if only clip_000005.wav
+    remains, the next clip is clip_000006.wav (not clip_000001.wav, which a
+    count-based index would pick and silently clobber clip_000005 later)."""
+    hi = -1
+    if os.path.isdir(out_dir):
+        for f in os.listdir(out_dir):
+            m = _CLIP_RE.match(f)
+            if m:
+                hi = max(hi, int(m.group(1)))
+    return hi + 1
+
+
 def plan_takes(out_dir, want):
     existing = 0
     if os.path.isdir(out_dir):
@@ -65,30 +85,40 @@ def _record(out_dir, seconds, label):
     import soundfile as sf
 
     os.makedirs(out_dir, exist_ok=True)
-    existing = len([f for f in os.listdir(out_dir) if f.endswith(".wav")])
+    index = next_index(out_dir)
     print(f"   SAY/RECORD NOW ({label}) …", flush=True)
     audio = sd.rec(int(seconds * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1, dtype="int16")
     sd.wait()
-    sf.write(clip_path(out_dir, existing), audio, SAMPLE_RATE, subtype="PCM_16")
+    sf.write(clip_path(out_dir, index), audio, SAMPLE_RATE, subtype="PCM_16")
     time.sleep(0.3)
 
 
 def record_positives():
     posd, _ = corpus_dirs()
+    target = len(POSITIVE_PROMPTS) * POSITIVE_TAKES_PER_PROMPT
     for prompt in POSITIVE_PROMPTS:
+        # Recompute remaining each prompt so a resume (some clips already on disk)
+        # records only what is still missing and stops once the target is met.
+        n = min(POSITIVE_TAKES_PER_PROMPT, plan_takes(posd, target))
+        if n == 0:
+            break
         print(f"\n-- POSITIVE: \"hey james\" — {prompt}")
-        for i in range(POSITIVE_TAKES_PER_PROMPT):
-            print(f"   [{i + 1}/{POSITIVE_TAKES_PER_PROMPT}] get ready…", end="", flush=True)
+        for i in range(n):
+            print(f"   [{i + 1}/{n}] get ready…", end="", flush=True)
             time.sleep(0.8)
             _record(posd, CLIP_SECONDS, prompt)
 
 
 def record_negatives():
     _, negd = corpus_dirs()
+    target = sum(t for _, t in NEGATIVE_PROMPTS)
     for prompt, takes in NEGATIVE_PROMPTS:
-        print(f"\n-- NEGATIVE: {prompt}  ({takes} takes)")
-        for i in range(takes):
-            print(f"   [{i + 1}/{takes}] get ready…", end="", flush=True)
+        n = min(takes, plan_takes(negd, target))
+        if n == 0:
+            break
+        print(f"\n-- NEGATIVE: {prompt}  ({n} takes)")
+        for i in range(n):
+            print(f"   [{i + 1}/{n}] get ready…", end="", flush=True)
             time.sleep(0.8)
             _record(negd, NEG_CLIP_SECONDS, prompt)
 

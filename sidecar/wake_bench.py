@@ -180,7 +180,8 @@ def main():
     ap.add_argument("--roc", action="store_true", help="sweep threshold and print recall/FP curve")
     ap.add_argument("--threshold", type=float, default=None)
     ap.add_argument("--tune", action="store_true",
-                    help="recommend threshold/bypass/or-score for the FP budget")
+                    help="recommend a --threshold for the FP budget; sweeps "
+                    "--threshold ONLY (does not tune bypass or or-score)")
     ap.add_argument("--fp-budget", type=float, default=0.5,
                     help="max false-wakes/hour to allow when tuning (default 0.5 ≈ a few/day)")
     args = ap.parse_args()

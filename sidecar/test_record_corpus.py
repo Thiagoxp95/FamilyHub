@@ -31,6 +31,26 @@ def run():
         print(f"[{'PASS' if c else 'FAIL'}] plan_takes resumes from existing")
         ok &= c
 
+    # next_index parses the max clip number (+1), NOT the file count, so a resume
+    # after deletions never re-uses a live index and clobbers an existing clip.
+    with tempfile.TemporaryDirectory() as d:
+        c = rc.next_index(d) == 0
+        print(f"[{'PASS' if c else 'FAIL'}] next_index empty dir is 0 (got {rc.next_index(d)})")
+        ok &= c
+
+        # non-contiguous: only clip_000005.wav present → next is 000006, not 000001
+        open(rc.clip_path(d, 5), "w").close()
+        got = rc.next_index(d)
+        c = got == 6 and rc.clip_path(d, got).endswith("clip_000006.wav")
+        print(f"[{'PASS' if c else 'FAIL'}] next_index skips to max+1 on a gap (got {got})")
+        ok &= c
+
+        # ignores non-clip files when computing the next index
+        open(os.path.join(d, "notes.txt"), "w").close()
+        c = rc.next_index(d) == 6
+        print(f"[{'PASS' if c else 'FAIL'}] next_index ignores non-clip files (got {rc.next_index(d)})")
+        ok &= c
+
     # corpus_dirs are under the canonical root
     posd, negd = rc.corpus_dirs()
     c = posd.endswith("wake-corpus/positive") and negd.endswith("wake-corpus/negative")

@@ -50,8 +50,10 @@ PHONETIC_CASES = [
     ("games rejected (cames confusable)", "hey games", ["james"], False),
     ("came rejected", "he came home", ["james"], False),
     ("cames rejected", "hey cames", ["james"], False),
-    # whole-word boundary: jameson is 7 chars, >1 edit from any 5-6 char alias
-    ("jameson rejected (whole-word, not substr)", "jameson whiskey", ["james"], False),
+    # jameson is >1 edit from every alias (2 edits from "james"), so the
+    # edit-distance-1 guard rejects it — this is the length/edit-distance guard,
+    # NOT a whole-word-vs-substring distinction.
+    ("jameson rejected (edit-distance > 1, not substring)", "jameson whiskey", ["james"], False),
     ("dreams rejected", "tie dreams", ["james"], False),
 ]
 

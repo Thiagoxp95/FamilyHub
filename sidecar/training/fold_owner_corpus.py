@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
 """Fold the owner wake corpus into the openWakeWord training set, so the retrain
-learns the owner's actual voice/room. Idempotent (skips already-folded clips).
+learns the owner's actual voice/room. Idempotent (skips already-folded clips by
+destination filename).
 
-Positives → generated-positive clips dir; negatives → adversarial-negative clips
-dir. Run from sidecar/training with the TRAINING venv after generate_clips has
-created my_custom_model/, OR before run_full.sh to seed real positives.
+openWakeWord's train.py reads training clips from
+``{output_dir}/{model_name}/{positive_train,negative_train}`` (see its lines
+648-651). With hey_james.yml (output_dir ./my_custom_model, model_name hey_james)
+those are ``my_custom_model/hey_james/positive_train`` and
+``.../negative_train`` — the dirs the trainer actually augments from. Positives →
+positive_train; negatives → negative_train.
+
+Run from sidecar/training with the TRAINING venv. Run this BEFORE run_full.sh:
+train.py:667 counts the clips already in positive_train and only tops up to
+n_samples, so seeding the owner clips first folds them into the training set
+(rather than being ignored). Re-running is safe — already-folded clips are
+skipped by destination filename.
 
     sidecar/training/.venv/bin/python sidecar/training/fold_owner_corpus.py
 """
@@ -14,11 +24,12 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CORPUS = os.path.expanduser("~/.familyhub/wake-corpus")
-# openWakeWord train.py writes generated clips under output_dir; these are the
-# conventional subdirs it reads back for augmentation. Adjust if hey_james.yml
-# output_dir changes.
-POS_DST = os.path.join(HERE, "my_custom_model", "positive_clips")
-NEG_DST = os.path.join(HERE, "my_custom_model", "adversarial_negative_clips")
+# The dirs openWakeWord train.py actually reads training clips from:
+# {output_dir}/{model_name}/{positive_train,negative_train} (train.py:648-651).
+# For hey_james.yml that is my_custom_model/hey_james/{positive,negative}_train.
+# Adjust if hey_james.yml output_dir/model_name changes.
+POS_DST = os.path.join(HERE, "my_custom_model", "hey_james", "positive_train")
+NEG_DST = os.path.join(HERE, "my_custom_model", "hey_james", "negative_train")
 
 
 def fold(src_dir, dst_dir, prefix):
