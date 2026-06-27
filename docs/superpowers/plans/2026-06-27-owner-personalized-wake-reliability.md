@@ -8,6 +8,13 @@
 
 **Tech Stack:** Python 3.11 (sidecar `.venv`), numpy, openwakeword 0.6.0 (onnxruntime), sherpa-onnx (Moonshine/Whisper), vosk; macOS `say`/`afconvert` for synthetic test audio; openWakeWord train stack (separate torch venv under `sidecar/training/.venv`).
 
+> **UPDATE 2026-06-27 (mid-execution):** Component 2 (AGC front-end) — Tasks 2 & 3 —
+> was built, then **reverted and dropped**. Empirical finding: openWakeWord Stage-1 is
+> **amplitude-invariant** (clean "hey James" scores 0.987 from full scale down to 0.01×);
+> the real misses are SNR + timbre, which pure-gain AGC cannot fix. The real levers are
+> personalization (C1, Task 7), threshold/bypass tuning (C4, Task 5), and Stage-2 phonetic +
+> OR-rule (C3, Tasks 4–5). Tasks 1, 4, 5, 6, 7 stand; Tasks 2 & 3 are historical only.
+
 ## Global Constraints
 
 - **No new runtime pip dependencies.** The shipped sidecar runtime is pinned to exactly `openwakeword==0.6.0`, `sherpa-onnx==1.13.2`, `vosk==0.3.44`, `numpy==2.4.6`, `onnxruntime==1.26.0` (see `sidecar/requirements.txt`). New runtime code may import only these + the Python stdlib. **Phonetic matching MUST be pure-Python inline — no `jellyfish`/`metaphone`/`pronouncing` at runtime.**
@@ -899,7 +906,6 @@ import os
 import sys
 import numpy as np
 
-os.environ["FAMILYHUB_WAKE_AGC"] = "0"  # isolate the OR-rule from AGC
 import wake_listener as wl
 
 SR = 16000
