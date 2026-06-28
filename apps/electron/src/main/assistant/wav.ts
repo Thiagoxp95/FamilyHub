@@ -18,7 +18,7 @@ export function pcm16ToWav(samples: Int16Array, sampleRate: number): Buffer {
   buffer.write("data", 36, "ascii");
   buffer.writeUInt32LE(dataSize, 40);
   for (let i = 0; i < samples.length; i++) {
-    buffer.writeInt16LE(samples[i], 44 + i * 2);
+    buffer.writeInt16LE(samples[i] ?? 0, 44 + i * 2);
   }
   return buffer;
 }
