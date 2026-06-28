@@ -213,9 +213,25 @@ interface DashboardBridge {
   connectReminders: () => Promise<RemindersResult>;
 }
 
+interface EnrolledMember {
+  id: string;
+  name: string;
+  sampleCount: number;
+}
+
+interface EnrollmentBridge {
+  listMembers: () => Promise<EnrolledMember[]>;
+  addMember: (name: string) => Promise<EnrolledMember[]>;
+  deleteMember: (id: string) => Promise<EnrolledMember[]>;
+  saveClip: (id: string, base64: string) => Promise<{ sampleCount: number }>;
+  deleteLastClip: (id: string) => Promise<{ sampleCount: number }>;
+  onMembers: (cb: (members: EnrolledMember[]) => void) => () => void;
+}
+
 interface FamilyHubBridge {
   assistant: AssistantBridge;
   dashboard: DashboardBridge;
+  enrollment: EnrollmentBridge;
   updater: UpdaterBridge;
   ping: () => Promise<string>;
   getVersion: () => Promise<string>;

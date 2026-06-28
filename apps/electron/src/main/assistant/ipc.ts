@@ -1,4 +1,7 @@
-import { ipcMain, type WebContents } from "electron";
+import { app, ipcMain, type WebContents } from "electron";
+import { join } from "node:path";
+import { EnrollmentStore } from "./enrollmentStore";
+import { decodePcm16 } from "./enrollmentIpc";
 import * as calendarTools from "./calendarTools";
 import {
   GeminiLiveSession,
@@ -373,6 +376,37 @@ export function registerAssistantIpc(
   ipcMain.handle("assistant:endLive", async () => {
     await controller?.endLive();
     return true;
+  });
+
+  // ----- Enrollment IPC handlers -----
+  const enrollment = new EnrollmentStore(join(app.getPath("userData"), "speaker-profiles"));
+
+  ipcMain.handle("enrollment:listMembers", () => enrollment.listMembers());
+
+  ipcMain.handle("enrollment:addMember", (event, name: string) => {
+    enrollment.addMember(name);
+    const members = enrollment.listMembers();
+    event.sender.send("enrollment:members", members);
+    return members;
+  });
+
+  ipcMain.handle("enrollment:deleteMember", (event, id: string) => {
+    enrollment.deleteMember(id);
+    const members = enrollment.listMembers();
+    event.sender.send("enrollment:members", members);
+    return members;
+  });
+
+  ipcMain.handle("enrollment:saveClip", (event, id: string, base64: string) => {
+    const result = enrollment.saveClip(id, decodePcm16(base64));
+    event.sender.send("enrollment:members", enrollment.listMembers());
+    return result;
+  });
+
+  ipcMain.handle("enrollment:deleteLastClip", (event, id: string) => {
+    const result = enrollment.deleteLastClip(id);
+    event.sender.send("enrollment:members", enrollment.listMembers());
+    return result;
   });
 }
 

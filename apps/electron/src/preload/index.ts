@@ -98,6 +98,14 @@ contextBridge.exposeInMainWorld("familyHub", {
     install: () => ipcRenderer.invoke("updater:install") as Promise<unknown>,
     onStatus: makeSubscription("updater:status"),
   },
+  enrollment: {
+    listMembers: () => ipcRenderer.invoke("enrollment:listMembers") as Promise<unknown>,
+    addMember: (name: string) => ipcRenderer.invoke("enrollment:addMember", name) as Promise<unknown>,
+    deleteMember: (id: string) => ipcRenderer.invoke("enrollment:deleteMember", id) as Promise<unknown>,
+    saveClip: (id: string, base64: string) => ipcRenderer.invoke("enrollment:saveClip", id, base64) as Promise<unknown>,
+    deleteLastClip: (id: string) => ipcRenderer.invoke("enrollment:deleteLastClip", id) as Promise<unknown>,
+    onMembers: makeSubscription("enrollment:members"),
+  },
   ping: () => ipcRenderer.invoke("app:ping") as Promise<string>,
   getVersion: () => ipcRenderer.invoke("app:getVersion") as Promise<string>,
 });
