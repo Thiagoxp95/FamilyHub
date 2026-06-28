@@ -2,7 +2,7 @@
 import { mkdtempSync, readdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { EnrollmentStore } from "./enrollmentStore";
 
 function freshStore() {
@@ -56,5 +56,18 @@ describe("EnrollmentStore", () => {
     s.deleteMember(m.id);
     expect(existsSync(dir)).toBe(false);
     expect(s.listMembers()).toEqual([]);
+  });
+  it("rejects a path-traversal / non-slug member id and touches nothing", () => {
+    const s = freshStore();
+    const keep = s.addMember("Keep");
+    for (const badId of ["../x", "a/b", "..", "Mom", "with space"]) {
+      expect(() => s.deleteMember(badId)).toThrow(/invalid member id/);
+      expect(() => s.saveClip(badId, new Int16Array([1]))).toThrow(/invalid member id/);
+      expect(() => s.deleteLastClip(badId)).toThrow(/invalid member id/);
+      expect(() => s.clipsDir(badId)).toThrow(/invalid member id/);
+    }
+    // The legit member and its clips are untouched.
+    expect(s.listMembers().map((x) => x.name)).toEqual(["Keep"]);
+    expect(existsSync(s.clipsDir(keep.id))).toBe(true);
   });
 });

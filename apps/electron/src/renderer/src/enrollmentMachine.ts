@@ -29,7 +29,10 @@ export function reduceEnrollment(state: EnrollmentState, event: EnrollmentEvent)
     case "keep":
       return { ...state, phase: "idle", kept: state.kept + 1, hasClip: false };
     case "redo":
-      return { ...state, phase: "recording", hasClip: false };
+      // Back to idle (not "recording") so the Record button reappears — the View
+      // only triggers a capture from idle, so "recording" would strand the user
+      // in a dead "Listening…" with no way to record again.
+      return { ...state, phase: "idle", hasClip: false };
     case "reset":
       return { ...state, phase: "idle", kept: event.kept, hasClip: false };
     default:

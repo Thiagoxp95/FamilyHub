@@ -21,6 +21,7 @@ export function EnrollmentRecorderView(props: {
   onKeep: () => void;
   onRedo: () => void;
   onClose: () => void;
+  error?: string;
 }): React.JSX.Element {
   const { counter, action } = recorderPrompt(props.state);
   return (
@@ -32,6 +33,9 @@ export function EnrollmentRecorderView(props: {
       <p className="enroll-counter">{counter}</p>
       <p className="enroll-phrase">Say: &ldquo;Hey James&rdquo;</p>
       <p className="enroll-action">{action}</p>
+      {props.error ? (
+        <p className="enroll-error" role="alert">{props.error}</p>
+      ) : null}
       {props.state.phase === "idle" && (
         <button onClick={props.onRecord}>Record</button>
       )}
@@ -59,32 +63,45 @@ export function EnrollmentRecorder(props: {
   const [state, setState] = useState<EnrollmentState>(() =>
     createEnrollmentState(props.target, props.kept),
   );
+  const [error, setError] = useState<string | null>(null);
   const pcmRef = useRef<Int16Array | null>(null);
 
   const onRecord = useCallback(async () => {
+    setError(null);
     setState((s) => reduceEnrollment(s, { type: "startRecord" }));
     try {
       pcmRef.current = await recordClip({ seconds: 2 });
       setState((s) => reduceEnrollment(s, { type: "clipCaptured" }));
     } catch {
+      // Mic denied or recordClip rejected/timed out — redo lands back in idle,
+      // so the Record button reappears and the user can retry.
+      pcmRef.current = null;
+      setError("Couldn't record that — check the microphone and try again.");
       setState((s) => reduceEnrollment(s, { type: "redo" }));
     }
   }, []);
 
   const onKeep = useCallback(async () => {
-    if (pcmRef.current) {
+    if (!pcmRef.current) return;
+    try {
       const { sampleCount } = await window.familyHub.enrollment.saveClip(
         props.memberId,
         int16ToBase64(pcmRef.current),
       );
       props.onChange?.(sampleCount);
+      setError(null);
+      pcmRef.current = null;
       setState((s) => reduceEnrollment({ ...s, kept: sampleCount - 1 }, { type: "keep" }));
+    } catch {
+      // Save failed — stay in review (sample not counted) and keep the clip so
+      // the user can re-keep or redo.
+      setError("Couldn't save that sample — try keeping it again or redo.");
     }
-    pcmRef.current = null;
   }, [props]);
 
   const onRedo = useCallback(() => {
     pcmRef.current = null;
+    setError(null);
     setState((s) => reduceEnrollment(s, { type: "redo" }));
   }, []);
 
@@ -96,6 +113,7 @@ export function EnrollmentRecorder(props: {
       onKeep={() => void onKeep()}
       onRedo={onRedo}
       onClose={props.onClose}
+      {...(error ? { error } : {})}
     />
   );
 }

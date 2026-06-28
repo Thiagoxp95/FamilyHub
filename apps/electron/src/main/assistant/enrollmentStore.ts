@@ -16,10 +16,18 @@ const SAMPLE_RATE = 16000;
 export class EnrollmentStore {
   constructor(private readonly baseDir: string) {}
 
+  // Ids arrive raw over IPC; only addMember slugs them. Without this guard a
+  // crafted id like "../.." would escape baseDir and rmSync could delete files
+  // outside the store. Every method that takes a caller-supplied id validates first.
+  private assertValidId(id: string): void {
+    if (!/^[a-z0-9-]+$/.test(id)) throw new Error("invalid member id");
+  }
+
   private memberDir(id: string): string {
     return join(this.baseDir, id);
   }
   clipsDir(id: string): string {
+    this.assertValidId(id);
     return join(this.memberDir(id), "clips");
   }
   private metaPath(id: string): string {
@@ -52,14 +60,21 @@ export class EnrollmentStore {
     if (!existsSync(this.baseDir)) return [];
     return readdirSync(this.baseDir)
       .filter((d) => existsSync(this.metaPath(d)))
-      .map((d) => {
-        const meta = JSON.parse(readFileSync(this.metaPath(d), "utf8")) as { id: string; name: string };
-        return { id: meta.id, name: meta.name, sampleCount: this.sampleCount(d) };
+      .map((d): EnrolledMember | null => {
+        // One corrupt/unreadable member.json must not brick the whole list.
+        try {
+          const meta = JSON.parse(readFileSync(this.metaPath(d), "utf8")) as { id: string; name: string };
+          return { id: meta.id, name: meta.name, sampleCount: this.sampleCount(d) };
+        } catch {
+          return null;
+        }
       })
+      .filter((m): m is EnrolledMember => m !== null)
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   deleteMember(id: string): void {
+    this.assertValidId(id);
     rmSync(this.memberDir(id), { recursive: true, force: true });
   }
 
@@ -74,6 +89,7 @@ export class EnrollmentStore {
   }
 
   saveClip(id: string, pcm16: Int16Array): { sampleCount: number } {
+    this.assertValidId(id);
     const dir = this.clipsDir(id);
     mkdirSync(dir, { recursive: true });
     const index = this.nextIndex(id);
@@ -83,6 +99,7 @@ export class EnrollmentStore {
   }
 
   deleteLastClip(id: string): { sampleCount: number } {
+    this.assertValidId(id);
     const dir = this.clipsDir(id);
     if (existsSync(dir)) {
       const files = readdirSync(dir).filter((f) => /^clip_\d+\.wav$/.test(f)).sort();

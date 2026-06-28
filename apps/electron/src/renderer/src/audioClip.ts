@@ -53,31 +53,46 @@ export async function recordClip(opts?: { seconds?: number; deviceId?: string })
   const needed = windowSampleCount(seconds, CAPTURE_RATE);
   const audio: MediaTrackConstraints = { channelCount: 1, echoCancellation: true, autoGainControl: true, noiseSuppression: false };
   if (opts?.deviceId) audio.deviceId = { exact: opts.deviceId };
-  const stream = await navigator.mediaDevices.getUserMedia({ audio });
-  const Ctor = window.AudioContext ?? window.webkitAudioContext;
-  const ctx = new Ctor({ sampleRate: CAPTURE_RATE });
+  // Hoisted so the finally can always tear both down, even if the AudioContext
+  // ctor throws right after getUserMedia opened the mic (which otherwise leaks
+  // an open input stream — the leak App.tsx's capture loop was hardened against).
+  let stream: MediaStream | null = null;
+  let ctx: AudioContext | null = null;
   try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio });
+    const Ctor = window.AudioContext ?? window.webkitAudioContext;
+    ctx = new Ctor({ sampleRate: CAPTURE_RATE });
     await ctx.resume().catch(() => {});
     const source = ctx.createMediaStreamSource(stream);
     const processor = ctx.createScriptProcessor(1024, 1, 1);
     const muted = ctx.createGain();
     muted.gain.value = 0;
     const chunks: Float32Array[] = [];
-    const done = new Promise<void>((resolve) => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const done = new Promise<void>((resolve, reject) => {
       processor.onaudioprocess = (e) => {
         chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
         if (accumulateWindow(chunks, needed).done) resolve();
       };
+      // A suspended / silent context never fires onaudioprocess; bound the wait
+      // so the recorder can't hang forever (the rejection still hits the finally
+      // below, so the mic + context are torn down on this path too).
+      timeout = setTimeout(
+        () => reject(new Error("recordClip timed out waiting for audio")),
+        seconds * 1000 + 1500,
+      );
+    }).finally(() => {
+      if (timeout !== undefined) clearTimeout(timeout);
     });
     source.connect(processor);
     processor.connect(muted);
     muted.connect(ctx.destination);
     await done;
     const flat: number[] = [];
-    for (const c of chunks) for (const s of c) { flat.push(s); if (flat.length >= needed) break; }
+    for (const c of chunks) for (const s of c) flat.push(s);
     return convertFloatSamplesToLinear16(flat.slice(0, needed));
   } finally {
-    stream.getTracks().forEach((t) => t.stop());
-    void ctx.close().catch(() => {});
+    stream?.getTracks().forEach((t) => t.stop());
+    void ctx?.close().catch(() => {});
   }
 }

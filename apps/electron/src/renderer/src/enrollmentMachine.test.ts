@@ -25,12 +25,12 @@ describe("enrollmentMachine", () => {
     s = reduceEnrollment(s, { type: "keep" });
     expect(s).toMatchObject({ phase: "idle", kept: 1, hasClip: false });
   });
-  it("redo → back to recording, clip discarded, kept unchanged", () => {
+  it("redo → back to idle (recoverable), clip discarded, kept unchanged", () => {
     let s = createEnrollmentState(15, 2);
     s = reduceEnrollment(s, { type: "startRecord" });
     s = reduceEnrollment(s, { type: "clipCaptured" });
     s = reduceEnrollment(s, { type: "redo" });
-    expect(s).toMatchObject({ phase: "recording", kept: 2, hasClip: false });
+    expect(s).toMatchObject({ phase: "idle", kept: 2, hasClip: false });
   });
   it("reset syncs kept from the store and returns to idle", () => {
     let s = reduceEnrollment(createEnrollmentState(15, 0), { type: "startRecord" });

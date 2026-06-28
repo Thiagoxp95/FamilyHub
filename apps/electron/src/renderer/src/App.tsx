@@ -194,6 +194,14 @@ export function App(): React.JSX.Element {
   // there's no meter UI anymore — only surface a hard failure to the banner.
   // Re-runs when the chosen input changes so the new device takes over.
   useEffect(() => {
+    // Family Setup owns the mic while open: tear the renderer capture down so the
+    // enrollment recorder's recordClip can acquire getUserMedia on its own (no
+    // second concurrent stream) and the stall watchdog can't fire restartCapture
+    // mid-enrollment. The effect re-runs and rebuilds capture when it closes.
+    if (familySetupOpen) {
+      return undefined;
+    }
+
     // Back off the watchdog after repeated failed rebuilds: 3s, 6s, 12s … 60s.
     // Resets to 3s as soon as a rebuilt loop produces audio (markCaptureHealthy).
     const stallTimeoutMs = Math.min(
@@ -224,6 +232,7 @@ export function App(): React.JSX.Element {
   }, [
     micDeviceId,
     captureEpoch,
+    familySetupOpen,
     refreshAudioInputs,
     handleMicChange,
     restartCapture,
