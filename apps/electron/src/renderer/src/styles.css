@@ -799,36 +799,114 @@ button:disabled {
   justify-content: center;
   z-index: 50;
 }
+/* ---------- Family Voices enrollment (SP1) ---------- */
+/* NOTE: .family-setup sits on the full-screen .hub-fullscreen-backdrop. It must
+   NOT set a width — a width here collapses the whole overlay into a narrow
+   "black sidebar" and hides the (absolutely-positioned) close button, which
+   strands the overlay open and leaves wake paused. Keep it width-free. */
 .family-setup {
-  width: min(92vw, 520px);
-  color: #f4f6fb;
-  font-size: 1.1rem;
+  color: var(--hub-text);
 }
-.family-row {
+.family-setup .hub-fullscreen-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: clamp(24px, 5vh, 56px) clamp(24px, 6vw, 80px) clamp(32px, 6vh, 64px);
+}
+.family-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(100%, 760px);
+}
+.family-list li {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.5rem 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  gap: 16px;
+  padding: 16px 20px;
+  background: var(--hub-glass);
+  border: 1px solid var(--hub-stroke-soft);
+  border-radius: var(--hub-radius-sm);
 }
-.family-name { flex: 1; }
-.family-count.none { color: #ff8a8a; }
-.family-count.under { color: #ffd27a; }
-.family-count.complete { color: #8ae6a1; }
-.enroll-prompt { font-size: 1.6rem; }
-.enroll-error { color: #ff8a8a; }
-.setup-button {
-  background: #1f2937;
-  color: #f4f6fb;
-  border: none;
-  border-radius: 999px;
-  padding: 0.45rem 0.95rem;
-  font-size: 0.95rem;
+.family-list li > span {
+  flex: 1;
+  font-size: 1.2rem;
+}
+.family-add-row {
+  display: flex;
+  gap: 12px;
+  width: min(100%, 760px);
+}
+.family-add-row input {
+  flex: 1;
+  padding: 14px 18px;
+  border-radius: var(--hub-radius-sm);
+  border: 1px solid var(--hub-stroke);
+  background: var(--hub-glass);
+  color: var(--hub-text);
+  font-size: 1.1rem;
+}
+.family-empty {
+  color: var(--hub-text-2);
+  font-size: 1.1rem;
+}
+
+/* The recorder is its own full-screen overlay (replaces the list while a member
+   is enrolling), so it needs its own backdrop + a reachable Done button. */
+.enroll-recorder {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  background: #05060d;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  text-align: center;
+  padding: 56px 48px;
+}
+.enroll-recorder header {
+  position: absolute;
+  inset-block-start: 24px;
+  inset-inline: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: calc(100% - 56px);
+}
+.enroll-recorder header h3 {
+  font-size: 1.4rem;
   font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
+  margin: 0;
 }
-.setup-button:hover { background: #374151; }
+.enroll-counter {
+  font-size: 1.3rem;
+  letter-spacing: 3px;
+  color: var(--hub-text-2);
+}
+.enroll-phrase {
+  font-size: clamp(2.4rem, 7vw, 4.5rem);
+  font-weight: 650;
+  line-height: 1.05;
+  margin: 0;
+}
+.enroll-action {
+  font-size: 1.25rem;
+  color: var(--hub-text-2);
+}
+.enroll-error {
+  color: #ff8a8a;
+  font-size: 1.1rem;
+}
+.enroll-done {
+  color: #8ae6a1;
+  font-size: 1.3rem;
+  font-weight: 600;
+}
 
 /* ---------- Sentinel visual port: renderer-only UI skin ---------- */
 :root {
