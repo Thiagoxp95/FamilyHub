@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { base64ToInt16, convertFloatSamplesToLinear16, int16ToBase64 } from "./audioClip";
 import { CalendarPanel } from "./CalendarPanel";
+import { FamilySetup } from "./FamilySetup";
+import { familySetupTransition } from "./familySetupControl";
 import { MicPicker } from "./MicPicker";
 import { NotesPanel } from "./NotesPanel";
 import { RemindersPanel } from "./RemindersPanel";
@@ -59,6 +61,7 @@ export function App(): React.JSX.Element {
   const [reminderList, setReminderList] = useState<string | null>(null);
   const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
   const [micDeviceId, setMicDeviceId] = useState<string>(loadSavedMicId);
+  const [familySetupOpen, setFamilySetupOpen] = useState(false);
   const playerRef = useRef<AudioPlayer | null>(null);
 
   // Device labels are only populated once a getUserMedia grant has happened, so
@@ -311,6 +314,18 @@ export function App(): React.JSX.Element {
           onChange={handleMicChange}
           selectedDeviceId={micDeviceId}
         />
+        <button
+          className="family-voices-btn"
+          onClick={() => {
+            const plan = familySetupTransition(true);
+            if (plan.listening === "stop") void window.familyHub.assistant.stopListening();
+            if (plan.bumpCapture) setCaptureEpoch((e) => e + 1);
+            setFamilySetupOpen(true);
+          }}
+          type="button"
+        >
+          Family voices
+        </button>
       </div>
 
       {/* Seamless top-right corner: shows only when an update is actionable. */}
@@ -392,6 +407,17 @@ export function App(): React.JSX.Element {
           panel={focusedPanel}
           reminderList={reminderList}
           onClose={() => setFocusedPanel(null)}
+        />
+      ) : null}
+
+      {familySetupOpen ? (
+        <FamilySetup
+          onClose={() => {
+            const plan = familySetupTransition(false);
+            if (plan.listening === "start") void window.familyHub.assistant.startListening();
+            if (plan.bumpCapture) setCaptureEpoch((e) => e + 1);
+            setFamilySetupOpen(false);
+          }}
         />
       ) : null}
     </div>
