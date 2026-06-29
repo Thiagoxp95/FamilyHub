@@ -386,7 +386,7 @@ describe("LiveController", () => {
     releaseComputer();
   });
 
-  it("mutes the mic while a tool call is in flight so chatter cannot reach Gemini", async () => {
+  it("keeps streaming the mic to Gemini while a tool runs (Gemini owns interruption)", async () => {
     const transcriber = new FakeTranscriber();
     const sessions: FakeSession[] = [];
     const sink = createSink();
@@ -414,7 +414,7 @@ describe("LiveController", () => {
     await vi.waitFor(() => expect(sessions).toHaveLength(1));
     const session = sessions[0];
 
-    controller.handleFrame("before-tool"); // live, no tool — streamed
+    controller.handleFrame("before-tool"); // live — streamed
     session?.handlers?.onEvent({
       kind: "toolCall",
       id: "t1",
@@ -423,73 +423,48 @@ describe("LiveController", () => {
     });
     await vi.waitFor(() => expect(runTool).toHaveBeenCalledTimes(1));
 
-    // Kitchen chatter while the tool runs — must NOT reach Gemini, but MUST
-    // feed the local wake listener so "hey james" can still interrupt.
+    // Frames spoken while the tool runs stream straight to Gemini — there is no
+    // local gate and the local listener is not fed mid-session. Gemini's own
+    // VAD decides whether this is an interruption.
     const writesBefore = transcriber.writes.length;
-    controller.handleFrame("chatter-1");
-    controller.handleFrame("chatter-2");
-    expect(session?.sentFrames).toEqual(["before-tool"]);
-    expect(transcriber.writes.slice(writesBefore)).toEqual([
-      "chatter-1",
-      "chatter-2",
-    ]);
+    controller.handleFrame("during-1");
+    controller.handleFrame("during-2");
+    expect(session?.sentFrames).toEqual(["before-tool", "during-1", "during-2"]);
+    expect(transcriber.writes.slice(writesBefore)).toEqual([]);
 
-    // Once the tool responds, the mic re-opens automatically.
     releaseTool();
     await vi.waitFor(() => expect(session?.toolResponses).toHaveLength(1));
     controller.handleFrame("after-tool");
-    expect(session?.sentFrames).toEqual(["before-tool", "after-tool"]);
+    expect(session?.sentFrames).toEqual([
+      "before-tool",
+      "during-1",
+      "during-2",
+      "after-tool",
+    ]);
   });
 
-  it("re-opens the mic mid-tool when the wake phrase is heard again", async () => {
-    const transcriber = new FakeTranscriber();
-    const sessions: FakeSession[] = [];
-    const sink = createSink();
-    let releaseTool: () => void = () => {};
-    const runTool = vi.fn(async () => {
-      await new Promise<void>((resolve) => {
-        releaseTool = resolve;
-      });
-      return { ok: true };
-    });
-    const controller = new LiveController({
-      createTranscriber: () => transcriber,
-      createSession: () => {
-        const session = new FakeSession();
-        sessions.push(session);
-        return session;
-      },
-      runTool,
-      sink,
-      idleTimeoutMs: 5_000,
-    });
-    await controller.start();
+  it("does not feed the local listener during a session and ignores a mid-session wake", async () => {
+    const { controller, transcriber, sessions } = await setup();
 
-    transcriber.emit("hey james add an event");
+    transcriber.emit("hey james hello");
     await vi.waitFor(() => expect(sessions).toHaveLength(1));
     const session = sessions[0];
 
-    session?.handlers?.onEvent({
-      kind: "toolCall",
-      id: "t1",
-      name: "create_calendar_event",
-      args: {},
-    });
-    await vi.waitFor(() => expect(runTool).toHaveBeenCalledTimes(1));
+    // Live frames stream to Gemini and are NOT duplicated into the local ASR.
+    const writesBefore = transcriber.writes.length;
+    controller.handleFrame("l1");
+    controller.handleFrame("l2");
+    expect(session?.sentFrames).toEqual(["l1", "l2"]);
+    expect(transcriber.writes.slice(writesBefore)).toEqual([]);
 
-    controller.handleFrame("gated"); // dropped — tool in flight
-    expect(session?.sentFrames).toEqual([]);
-
-    // Wake phrase during the tool re-opens the mic WITHOUT starting a second
-    // session, so the user can barge in.
+    // A wake phrase heard mid-session is inert: no second session, no change to
+    // the stream — Gemini owns interruption.
     transcriber.emit("hey james never mind");
     await new Promise((r) => setTimeout(r, 10));
     expect(sessions).toHaveLength(1);
 
-    controller.handleFrame("barge-in");
-    expect(session?.sentFrames).toEqual(["barge-in"]);
-
-    releaseTool();
+    controller.handleFrame("l3");
+    expect(session?.sentFrames).toEqual(["l1", "l2", "l3"]);
   });
 
   it("resets dashboard focus when the session ends (collapses full-screen quadrants)", async () => {

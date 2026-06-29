@@ -365,7 +365,8 @@ export function registerAssistantIpc(
   });
 
   // Continuous microphone stream (base64 LINEAR16 @16 kHz). The controller feeds
-  // every frame to the local listener and decides what to buffer/forward.
+  // idle frames to the local wake listener; once a session is live every frame
+  // streams straight to Gemini, which owns turn-taking and interruption.
   ipcMain.on("assistant:micFrame", (event, frame: unknown) => {
     if (typeof frame === "string") {
       liveSender = event.sender;
