@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseTranscriptLine } from "./localTranscriber";
+import { parseTranscriptLine, parseUtteranceLine } from "./localTranscriber";
 
 describe("parseTranscriptLine", () => {
   it("parses a partial transcript with words", () => {
@@ -48,5 +48,32 @@ describe("parseTranscriptLine", () => {
     expect(parseTranscriptLine("not json")).toBeNull();
     expect(parseTranscriptLine("[1,2,3]")).toBeNull();
     expect(parseTranscriptLine('{"type":"weird","text":"x"}')).toBeNull();
+  });
+
+  it("returns null for utterance lines (reserved for parseUtteranceLine)", () => {
+    expect(parseTranscriptLine(JSON.stringify({
+      type: "utterance", text: "jonas party is saturday", t0: 100.5, t1: 103.2, engine: "parakeet",
+    }))).toBeNull();
+  });
+});
+
+describe("parseUtteranceLine", () => {
+  it("parses a well-formed utterance line", () => {
+    const line = JSON.stringify({
+      type: "utterance", text: "jonas party is saturday", t0: 100.5, t1: 103.2, engine: "parakeet",
+    });
+    expect(parseUtteranceLine(line)).toEqual({
+      type: "utterance", text: "jonas party is saturday", t0: 100.5, t1: 103.2, engine: "parakeet",
+    });
+  });
+
+  it("rejects wake transcript lines", () => {
+    expect(parseUtteranceLine(JSON.stringify({ type: "final", text: "hey james", words: [] }))).toBeNull();
+  });
+
+  it("rejects garbage and missing fields", () => {
+    expect(parseUtteranceLine("not json")).toBeNull();
+    expect(parseUtteranceLine(JSON.stringify({ type: "utterance", text: 5 }))).toBeNull();
+    expect(parseUtteranceLine(JSON.stringify({ type: "utterance", text: "x", t0: "a", t1: 2, engine: "e" }))).toBeNull();
   });
 });

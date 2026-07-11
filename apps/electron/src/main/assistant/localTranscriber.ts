@@ -16,8 +16,17 @@ export interface TranscriptMessage {
   words: TranscriptWord[];
 }
 
+export interface AmbientUtterance {
+  type: "utterance";
+  text: string;
+  t0: number;   // epoch seconds
+  t1: number;
+  engine: string;
+}
+
 export interface LocalTranscriberHandlers {
   onTranscript: (message: TranscriptMessage) => void;
+  onUtterance?: (utterance: AmbientUtterance) => void;
   onError: (message: string) => void;
   onExit: (code: number | null) => void;
 }
@@ -86,6 +95,33 @@ function parseWord(value: unknown): TranscriptWord | null {
   }
 
   return { word: record.word, startMs: record.startMs, endMs: record.endMs };
+}
+
+// Pure: one stdout line → an ambient utterance, or null if it is not one.
+export function parseUtteranceLine(line: string): AmbientUtterance | null {
+  const trimmed = line.trim();
+  if (trimmed.length === 0) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+
+  const record = parsed as Record<string, unknown>;
+  if (
+    record.type !== "utterance" ||
+    typeof record.text !== "string" ||
+    typeof record.t0 !== "number" ||
+    typeof record.t1 !== "number" ||
+    typeof record.engine !== "string"
+  ) {
+    return null;
+  }
+
+  return { type: "utterance", text: record.text, t0: record.t0, t1: record.t1, engine: record.engine };
 }
 
 // Resolve the bundled sidecar's Python interpreter and entry script. Dev runs
@@ -170,9 +206,14 @@ export class WakeWordSidecar implements LocalTranscriber {
     const stdout = createInterface({ input: child.stdout });
     stdout.on("line", (line) => {
       const message = parseTranscriptLine(line);
-
       if (message) {
         handlers.onTranscript(message);
+        return;
+      }
+
+      const utterance = parseUtteranceLine(line);
+      if (utterance) {
+        handlers.onUtterance?.(utterance);
       }
     });
 
