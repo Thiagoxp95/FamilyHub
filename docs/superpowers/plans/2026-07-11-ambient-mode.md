@@ -6,7 +6,7 @@
 
 **Architecture:** The Python wake sidecar gains an ambient branch (Silero VAD → sherpa-onnx Parakeet/Moonshine decode) that emits `{"type":"utterance",...}` lines on its existing stdout protocol. Electron main gains `src/main/ambient/` modules: a SQLite(+sqlite-vec) memory store, an Ollama client (embeddings + trigger LLM), a trigger engine, a suggestion service, and a nightly facts digest. Gemini Live gains `search_memory`/`forget_memory` tools. The renderer gains a suggestion card.
 
-**Tech Stack:** Python (sherpa-onnx, numpy — already in sidecar), TypeScript/Electron, `node:sqlite` (`DatabaseSync`) + `sqlite-vec` npm (prebuilt loadable extension, no native compile), Ollama HTTP API on localhost, React 19, vitest, pytest.
+**Tech Stack:** Python (sherpa-onnx, numpy — already in sidecar), TypeScript/Electron, `node:sqlite` (`DatabaseSync`) + `sqlite-vec` npm (prebuilt loadable extension, no native compile), Ollama HTTP API on localhost, React 19, vitest, standalone Python test scripts.
 
 **Spec:** `docs/superpowers/specs/2026-07-11-ambient-mode-design.md` — read it first.
 
@@ -14,7 +14,7 @@
 
 - TypeScript compiles with `exactOptionalPropertyTypes: true` — `x: T | undefined` is NOT assignable to `x?: T`; conditionally omit keys instead.
 - Lint is `eslint . --max-warnings=0` (run in `apps/electron/`) — one warning fails.
-- TS tests: `npx vitest run <file>` in `apps/electron/`. Python tests: `python3 -m pytest <file> -v` in `sidecar/` (use `sidecar/.venv/bin/python` if present).
+- TS tests: `npx vitest run <file>` in `apps/electron/`. Python tests follow the sidecar convention: STANDALONE scripts (no pytest — it is not installed) with assert-based test functions and a `run()` harness printing `[PASS]`/`[FAIL]` per case and exiting 0/1 (see `test_wake_bench.py` for the pattern). Run as `/Users/tedyeng1/Pessoal/FamilyHub/sidecar/.venv/bin/python <test_file>.py` from the worktree's `sidecar/` directory — the venv lives in the MAIN checkout, not the worktree. Where the plan shows pytest-style test functions, keep the functions but call them from `run()`; replace pytest-only fixtures (e.g. `capsys`) with `contextlib.redirect_stdout(io.StringIO())`.
 - Wake detection behavior must be byte-for-byte unchanged. The ONLY `wake_listener.py` edits allowed are the minimal ambient seam in Task 2.
 - No cloud calls anywhere in the ambient path. Ollama is only ever `http://127.0.0.1:11434` (override `FAMILYHUB_OLLAMA_URL`).
 - Env knobs (all read at startup unless noted): `FAMILYHUB_AMBIENT` (default on; `0/off/false/no` disables), `FAMILYHUB_OLLAMA_URL`, `FAMILYHUB_AMBIENT_LLM` (default `qwen3:4b`), `FAMILYHUB_AMBIENT_EMBED_MODEL` (default `nomic-embed-text`), `FAMILYHUB_AMBIENT_ASR` (override Parakeet model dir).
@@ -143,7 +143,7 @@ def test_disabled_drops_audio_and_resets():
 
 - [ ] **Step 2: Run tests, verify they fail**
 
-Run: `cd sidecar && python3 -m pytest test_ambient_transcriber.py -v` (use `.venv/bin/python` if present)
+Run: `cd sidecar && /Users/tedyeng1/Pessoal/FamilyHub/sidecar/.venv/bin/python test_ambient_transcriber.py` (use `.venv/bin/python` if present)
 Expected: FAIL — `ModuleNotFoundError: No module named 'ambient_transcriber'`
 
 - [ ] **Step 3: Implement `sidecar/ambient_transcriber.py`**
@@ -323,7 +323,7 @@ NOTE for implementer: verify the exact sherpa-onnx VAD/moonshine constructor key
 
 - [ ] **Step 4: Run tests, verify they pass**
 
-Run: `cd sidecar && python3 -m pytest test_ambient_transcriber.py -v`
+Run: `cd sidecar && /Users/tedyeng1/Pessoal/FamilyHub/sidecar/.venv/bin/python test_ambient_transcriber.py`
 Expected: 4 passed
 
 - [ ] **Step 5: Append model downloads to `sidecar/setup.sh` and `apps/electron/scripts/build-sidecar-runtime.sh`**
@@ -347,7 +347,7 @@ fi
 
 Verify both URLs respond (`curl -sIL <url> | head -1` → HTTP 200/302); if the v3 asset name differs, list the release assets and use the closest `parakeet-tdt-0.6b-v3` int8 variant, updating `PARAKEET_DIR` default to match. Run the setup.sh download once so the models exist locally.
 
-- [ ] **Step 6: Smoke-test with real models** (not part of pytest)
+- [ ] **Step 6: Smoke-test with real models** (not part of the unit tests)
 
 Run: `cd sidecar && python3 -c "
 from ambient_transcriber import AmbientTranscriber
@@ -425,7 +425,7 @@ def test_ambient_utterances_emitted(capsys):
 
 - [ ] **Step 2: Run test, verify it fails**
 
-Run: `cd sidecar && python3 -m pytest test_wake_listener_ambient.py -v`
+Run: `cd sidecar && /Users/tedyeng1/Pessoal/FamilyHub/sidecar/.venv/bin/python test_wake_listener_ambient.py`
 Expected: FAIL — `AttributeError: module 'wake_listener' has no attribute 'handle_control'`
 
 - [ ] **Step 3: Implement the seam in `wake_listener.py`**
@@ -491,7 +491,7 @@ No other `wake_listener.py` changes are permitted.
 
 - [ ] **Step 4: Run ALL sidecar tests**
 
-Run: `cd sidecar && python3 -m pytest test_wake_listener_ambient.py test_ambient_transcriber.py -v` then the full pre-existing suite `python3 -m pytest -v`
+Run: `cd sidecar && /Users/tedyeng1/Pessoal/FamilyHub/sidecar/.venv/bin/python test_wake_listener_ambient.py && /Users/tedyeng1/Pessoal/FamilyHub/sidecar/.venv/bin/python test_ambient_transcriber.py` then any pre-existing standalone sidecar tests (e.g. `/Users/tedyeng1/Pessoal/FamilyHub/sidecar/.venv/bin/python test_wake_bench.py`)
 Expected: all pass (pre-existing failures, if any, must be reported not fixed).
 
 - [ ] **Step 5: Commit**
@@ -1146,6 +1146,6 @@ The user message is the recent window: `store.recentWindow(500)` formatted as `"
 - Modify: `docs/superpowers/specs/2026-07-11-ambient-mode-design.md` (only if implementation diverged — record what and why)
 
 - [ ] **Step 1: Document** every env knob from Global Constraints, the Ollama prerequisite (`brew install ollama; ollama pull qwen3:4b; ollama pull nomic-embed-text`), the DB location, and the "forget" flow.
-- [ ] **Step 2: Full verification:** `cd apps/electron && npx vitest run && npm run typecheck && npm run lint` and `cd sidecar && python3 -m pytest -v`. All green.
+- [ ] **Step 2: Full verification:** `cd apps/electron && npx vitest run && npm run typecheck && npm run lint` and `cd sidecar && for t in test_*.py; do /Users/tedyeng1/Pessoal/FamilyHub/sidecar/.venv/bin/python "$t" || exit 1; done`. All green.
 - [ ] **Step 3: End-to-end manual QA (the spec's checklist):** ambient rows accumulate; "Hey James" wake unaffected; session speech lands tagged `session_user`/`session_james`; `search_memory` answers "when is Jonas's party?" after mentioning it ambiently; suggestion card round-trip (chime → voice "sure James" → reminder exists in Reminders.app); "James, forget that" deletes.
 - [ ] **Step 4: Commit** — `git commit -m "docs(ambient): runbook + knobs"`.
