@@ -45,5 +45,21 @@ if [ ! -d "models/${VOSK_MODEL}" ]; then
   (cd models && unzip -q "${VOSK_MODEL}.zip" && rm -f "${VOSK_MODEL}.zip")
 fi
 
+# Ambient mode: Silero VAD + Parakeet-TDT v3 int8 (ambient transcription).
+# Moonshine tiny (downloaded above) is the fallback ASR if Parakeet is absent.
+SILERO_VAD_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
+if [ ! -f "models/silero_vad.onnx" ]; then
+  echo "Downloading Silero VAD (~2 MB)…"
+  curl -sL -o "models/silero_vad.onnx" "$SILERO_VAD_URL"
+fi
+
+PARAKEET="sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
+PARAKEET_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${PARAKEET}.tar.bz2"
+if [ ! -d "models/${PARAKEET}" ]; then
+  echo "Downloading Parakeet-TDT v3 int8 (~600 MB)…"
+  curl -sL -o "models/${PARAKEET}.tar.bz2" "$PARAKEET_URL"
+  (cd models && tar xjf "${PARAKEET}.tar.bz2" && rm -f "${PARAKEET}.tar.bz2")
+fi
+
 echo "Sidecar ready at $(pwd) (default engine: twostage / openWakeWord → Moonshine)"
 echo "Verify with: ./.venv/bin/python selftest.py"

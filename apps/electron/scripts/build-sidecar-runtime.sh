@@ -103,5 +103,21 @@ if [ ! -d "$SIDECAR/models/$WHISPER" ]; then
     && rm -f "$WHISPER.tar.bz2" )
 fi
 
+# Ambient mode: Silero VAD + Parakeet-TDT v3 int8 (ambient transcription).
+# Moonshine tiny (downloaded above) is the fallback ASR if Parakeet is absent.
+if [ ! -f "$SIDECAR/models/silero_vad.onnx" ]; then
+  echo ">>> Downloading Silero VAD (~2 MB)…"
+  curl -fsSL -o "$SIDECAR/models/silero_vad.onnx" \
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
+fi
+
+PARAKEET="sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
+if [ ! -d "$SIDECAR/models/$PARAKEET" ]; then
+  echo ">>> Downloading Parakeet-TDT v3 int8 (~600 MB)…"
+  curl -fsSL -o "$SIDECAR/models/$PARAKEET.tar.bz2" \
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${PARAKEET}.tar.bz2"
+  ( cd "$SIDECAR/models" && tar xjf "$PARAKEET.tar.bz2" && rm -f "$PARAKEET.tar.bz2" )
+fi
+
 echo ">>> sidecar runtime ready: $PYBIN"
 "$PYBIN" -c "$DEPS_CHECK; print('deps OK')"
