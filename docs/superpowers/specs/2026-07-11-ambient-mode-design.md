@@ -17,7 +17,7 @@ Everything runs locally. No ambient audio or text ever leaves the Mac; the only 
 
 | Decision | Choice |
 |---|---|
-| STT engine | **Local, swappable.** NVIDIA Parakeet v3 via `parakeet-mlx` (Apple Neural Engine, streaming) behind a `Transcriber` interface. Soniox cloud backend can be added later if far-field accuracy disappoints. |
+| STT engine | **Local, swappable.** NVIDIA Parakeet-TDT v3 int8 via **sherpa-onnx** (already a sidecar dependency for Moonshine — zero new ML runtimes), VAD-segmented decodes behind a transcriber seam. Falls back to the bundled Moonshine model if the Parakeet model dir is absent. Soniox cloud backend can be added later if far-field accuracy disappoints. |
 | Trigger model | **Local small LLM via Ollama** (`qwen3:4b` class), JSON-schema output. |
 | Trigger UX | **Chime + on-screen suggestion card**, auto-dismiss ~30 s, accept by tap or voice. James never verbally interjects. |
 | Memory retention | **Raw forever + facts digest.** All utterances kept indefinitely in a local store; nightly local-LLM pass distills durable facts into a curated layer searched first. "James, forget that" deletion supported. |
@@ -51,8 +51,8 @@ mic frames (16 kHz) ──┬──> openWakeWord + verifier chain      (unchang
 
 ### 1. Sidecar: ambient transcription (`sidecar/ambient_transcriber.py`)
 
-- Silero VAD segments speech from the shared 16 kHz frame stream (hangover ~300 ms; min segment 400 ms to skip coughs/clatter).
-- Streaming Parakeet v3 via `parakeet-mlx` decodes each voiced segment. MLX avoids the pinned-torch conflicts documented in `sidecar/README.md`; if `parakeet-mlx` cannot load on the bundled runtime, fall back to the already-shipped Moonshine streaming decode (same interface, lower accuracy).
+- Silero VAD (via sherpa-onnx `VoiceActivityDetector`) segments speech from the shared 16 kHz frame stream (silence hangover ~300 ms; min segment 400 ms to skip coughs/clatter).
+- Each voiced segment is decoded offline by sherpa-onnx: Parakeet-TDT v3 int8 (nemo_transducer) when its model dir is present, else the already-shipped Moonshine tiny. Same runtime the wake verifier chain already uses — avoids the pinned-torch conflicts documented in `sidecar/README.md`.
 - On segment end, emits one stdout line: `{"type":"utterance","text":"...","t0":<epoch s>,"t1":<epoch s>,"engine":"parakeet"}`.
 - Honors stdin control commands: `{"cmd":"ambient","on":bool}`. Starts **on** by default when `FAMILYHUB_AMBIENT` is not `0`.
 - `wake_listener.py` changes are limited to: instantiate the ambient module, pass frames to it, forward its control command. All wake logic untouched. (Another agent is actively editing `wake_listener.py` — keep this integration to the minimal seam and coordinate at merge time.)
@@ -83,7 +83,7 @@ mic frames (16 kHz) ──┬──> openWakeWord + verifier chain      (unchang
 
 - Main pushes `{suggestion}` over IPC; renderer plays a soft chime (reuse `audioClip.ts` infra) and shows a card: suggestion text + Accept / Dismiss. Auto-dismiss after 30 s → status `expired`.
 - **Accept paths:** tap; or voice — while a card is visible, ambient utterances matching `/\b(yes|yeah|sure|ok(ay)?|do it)\b.*\bjames\b|\bjames\b.*\b(yes|yeah|sure|do it)\b/i` accept it.
-- **On accept:** `reminder`/`calendar`/`shopping` kinds execute directly through the existing tool implementations (`calendarTools`, Reminders bridge) with the extracted payload — no Gemini session needed. `question` kind starts a Gemini Live session preloaded with the question context so James answers aloud.
+- **On accept:** `reminder`/`calendar`/`shopping` kinds execute directly through the existing tool implementations (`calendarTools`, Reminders bridge) with the extracted payload — no Gemini session needed. `question` kind has no accept action in v1: the card shows the question with a "Say 'Hey James' to ask" hint (auto-starting a context-preloaded session needs a new session API — follow-up).
 - **UI lesson applied** (Family Voices postmortem): the card gets its own scoped CSS class namespace, a CSS collision pass against existing selectors, and a manual visual check on the real dashboard before release — DOM-presence tests are not sufficient.
 
 ### 6. Main: memory tools for Gemini Live
@@ -104,7 +104,7 @@ mic frames (16 kHz) ──┬──> openWakeWord + verifier chain      (unchang
 - **Ollama down:** store-and-backfill as above; a single "ambient triggers paused (Ollama unreachable)" info event, not repeated spam.
 - **Disk:** raw text + 768-dim embeddings ≈ a few MB/month — no rotation needed; revisit if speaker audio is ever stored (it is not, only text).
 - **Clock/timezones:** all timestamps stored as epoch; date resolution in prompts uses local timezone.
-- **Privacy:** UI toggle + `FAMILYHUB_AMBIENT=0` kill switch; `forget_memory` tool; the memory DB lives under the user's home dir with default macOS protections.
+- **Privacy:** `FAMILYHUB_AMBIENT=0` kill switch (v1; an in-UI toggle is a follow-up); `forget_memory` tool; the memory DB lives under the user's home dir with default macOS protections.
 
 ## Testing
 
