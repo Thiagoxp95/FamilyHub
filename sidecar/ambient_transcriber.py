@@ -74,12 +74,14 @@ class AmbientTranscriber:
         if not self._enabled or not pcm_bytes:
             return []
 
-        samples = (
-            np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-        )
-
         utterances = []
         try:
+            # Inside the try: an odd-byte frame raises ValueError from
+            # np.frombuffer and must be logged + dropped like a decode failure
+            # — feed() never raises.
+            samples = (
+                np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+            )
             self._vad.accept_waveform(samples)
             while not self._vad.empty():
                 segment = self._vad.front

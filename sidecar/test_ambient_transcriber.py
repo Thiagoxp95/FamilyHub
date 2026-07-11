@@ -97,11 +97,24 @@ def test_disabled_drops_audio_and_resets():
     assert len(vad.fed) == 1
 
 
+def test_odd_length_pcm_is_dropped_not_raised():
+    # feed() must never raise: an odd-byte frame can't be int16-decoded and
+    # must be logged + dropped, like a decode failure.
+    vad, rec = FakeVad(), FakeRecognizer()
+    at = AmbientTranscriber(vad, rec)
+    assert at.feed(b"\x00\x00\x00") == []
+    assert vad.fed == []  # malformed frame never reaches the VAD
+    # A well-formed frame afterwards still works.
+    assert at.feed(pcm(1600)) == []
+    assert len(vad.fed) == 1
+
+
 CASES = [
     test_feed_without_segments_returns_empty,
     test_feed_drains_segments_into_utterances,
     test_empty_transcripts_are_dropped,
     test_disabled_drops_audio_and_resets,
+    test_odd_length_pcm_is_dropped_not_raised,
 ]
 
 
