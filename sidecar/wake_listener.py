@@ -105,6 +105,29 @@ def emit(message):
     sys.stdout.flush()
 
 
+def handle_control(command, engine, ambient):
+    """Dispatch one stdin JSON control command. Never raises."""
+    cmd = command.get("cmd")
+    if cmd == "reset":
+        if engine is not None:
+            engine.reset()
+        if ambient is not None:
+            # A session just ended (Electron resets on finalize): drop any
+            # half-collected VAD segment so pre-session audio can't bridge
+            # into a post-session utterance.
+            ambient.reset()
+    elif cmd == "ambient" and ambient is not None:
+        ambient.set_enabled(bool(command.get("on", True)))
+
+
+def pump_ambient(ambient, pcm):
+    """Feed one frame to the ambient transcriber and emit its utterances."""
+    if ambient is None:
+        return
+    for utterance in ambient.feed(pcm):
+        emit(utterance)
+
+
 def phrase_confirmed(words, phrase_tokens, min_confidence):
     """True iff `phrase_tokens` appear as a contiguous, in-order run within
     Vosk's result `words`, each with conf >= min_confidence.
@@ -653,6 +676,15 @@ def main():
     wake_words = [w.strip().lower() for w in args.wake_words.split(",") if w.strip()]
     engine, description = build_engine(args, wake_words)
 
+    ambient = None
+    if os.environ.get("FAMILYHUB_AMBIENT", "1").strip().lower() not in ("0", "off", "false", "no"):
+        try:
+            from ambient_transcriber import AmbientTranscriber
+            ambient = AmbientTranscriber.create()
+        except Exception as exc:  # noqa: BLE001 - ambient is optional, wake is not
+            dlog(f"ambient disabled: {exc}")
+    dlog(f"ambient: {'on' if ambient else 'off'}")
+
     emit({"type": "partial", "text": "", "words": []})  # ready signal
     dlog(f"wake engine: {description}")
 
@@ -678,8 +710,7 @@ def main():
                 command = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if command.get("cmd") == "reset":
-                engine.reset()
+            handle_control(command, engine, ambient)
             continue
 
         try:
@@ -691,6 +722,7 @@ def main():
 
         if engine.feed(pcm):
             emit({"type": "final", "text": wake_text, "words": []})
+        pump_ambient(ambient, pcm)
 
 
 if __name__ == "__main__":
