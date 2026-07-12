@@ -107,7 +107,7 @@ transcription; Electron owns memory, triggers, and the suggestion UI. See
 - **`suggestionService.ts`** + renderer card — chime + on-screen card,
   accept by tap or voice ("yes/sure/ok ... james"), auto-expires after 30 s.
 - **Memory tools for Gemini Live** (`liveSession.ts`) — `search_memory(query,
-  days_back?)` and `forget_memory(query)` are added to the session tool
+  daysBack?)` and `forget_memory(query)` are added to the session tool
   declarations so James can search household memory and honor "James, forget
   that" during a live session (deletion requires a live session; there is no
   local-only "forget" path).
