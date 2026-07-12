@@ -5,8 +5,9 @@
 # system Python, no venv, and no internet at first launch.
 #
 # Produces sidecar/.runtime/ — a python-build-standalone CPython plus the
-# pip-installed wake deps and openWakeWord feature models. electron-builder ships
-# it under Contents/Resources/sidecar/.runtime (see apps/electron/package.json
+# pip-installed wake deps (livekit-wakeword ships its mel/embedding feature
+# models inside the wheel). electron-builder ships it under
+# Contents/Resources/sidecar/.runtime (see apps/electron/package.json
 # extraResources) and signs it with the app's identity during the mac signing
 # pass, so it satisfies the hardened runtime.
 #
@@ -19,7 +20,7 @@ PY_VERSION="${PY_VERSION:-3.11}"
 SIDECAR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../sidecar" && pwd)"
 RUNTIME="$SIDECAR/.runtime"
 PYBIN="$RUNTIME/bin/python3"
-DEPS_CHECK='import openwakeword, onnxruntime, sherpa_onnx, vosk, numpy'
+DEPS_CHECK='import livekit.wakeword, onnxruntime, numpy, sherpa_onnx'
 
 # --- Fast path: a healthy runtime already exists ---------------------------
 if [ -z "${FORCE:-}" ] && [ -x "$PYBIN" ] && "$PYBIN" -c "$DEPS_CHECK" 2>/dev/null; then
@@ -59,52 +60,23 @@ else
   "$PYBIN" -m pip install --upgrade pip
   "$PYBIN" -m pip install --no-cache-dir -r "$SIDECAR/requirements.txt"
 
-  # openWakeWord's shared melspectrogram/embedding ONNX models are fetched on
-  # first use; pre-fetch into site-packages so the runtime works offline.
-  echo ">>> Pre-fetching openWakeWord feature models…"
-  "$PYBIN" -c "import openwakeword.utils as u; u.download_models()"
+  # livekit-wakeword bundles its mel + speech-embedding feature models inside
+  # the wheel, so the runtime is offline-complete after pip install — no
+  # post-install model downloads.
 
   echo ">>> Pruning caches to shrink the bundle…"
   find "$RUNTIME" -type d -name "__pycache__" -prune -exec rm -rf {} + 2>/dev/null || true
   find "$RUNTIME" -type d -name "test" -path "*/lib/python*/test" -prune -exec rm -rf {} + 2>/dev/null || true
 fi
 
-# --- Ensure the large offline ASR models exist (gitignored; fetch if missing) ---
-# These ship from the working tree via extraResources; a clean checkout won't
-# have them, so download-if-missing keeps a from-scratch release self-contained.
+# The wake classifier (models/hey_james.onnx) is committed to the repo; the old
+# stage-2 ASR verifier bundles (Moonshine/Whisper/Vosk, ~190 MB) are gone with
+# the two-stage engine.
 mkdir -p "$SIDECAR/models"
 
-MOONSHINE="sherpa-onnx-moonshine-tiny-en-int8"
-if [ ! -d "$SIDECAR/models/$MOONSHINE" ]; then
-  echo ">>> Downloading Moonshine tiny.en (~50 MB)…"
-  curl -fsSL -o "$SIDECAR/models/$MOONSHINE.tar.bz2" \
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${MOONSHINE}.tar.bz2"
-  ( cd "$SIDECAR/models" && tar xjf "$MOONSHINE.tar.bz2" && rm -f "$MOONSHINE.tar.bz2" )
-fi
-
-VOSK="vosk-model-small-en-us-0.15"
-if [ ! -d "$SIDECAR/models/$VOSK" ]; then
-  echo ">>> Downloading Vosk fallback model (~40 MB)…"
-  curl -fsSL -o "$SIDECAR/models/$VOSK.zip" "https://alphacephei.com/vosk/models/${VOSK}.zip"
-  ( cd "$SIDECAR/models" && unzip -q "$VOSK.zip" && rm -f "$VOSK.zip" )
-fi
-
-# Whisper tiny.en (second Stage-2 wake verifier; int8 + tokens only, ~99 MB).
-# The release tarball also carries fp32 models we don't ship — extract, keep
-# the int8 pieces, drop the rest.
-WHISPER="sherpa-onnx-whisper-tiny.en"
-if [ ! -d "$SIDECAR/models/$WHISPER" ]; then
-  echo ">>> Downloading Whisper tiny.en (~99 MB int8)…"
-  curl -fsSL -o "$SIDECAR/models/$WHISPER.tar.bz2" \
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${WHISPER}.tar.bz2"
-  ( cd "$SIDECAR/models" \
-    && tar xjf "$WHISPER.tar.bz2" "$WHISPER/tiny.en-encoder.int8.onnx" \
-         "$WHISPER/tiny.en-decoder.int8.onnx" "$WHISPER/tiny.en-tokens.txt" \
-    && rm -f "$WHISPER.tar.bz2" )
-fi
-
-# Ambient mode: Silero VAD + Parakeet-TDT v3 int8 (ambient transcription).
-# Moonshine tiny (downloaded above) is the fallback ASR if Parakeet is absent.
+# Ambient mode (ambient_transcriber.py): Silero VAD + Parakeet-TDT v3 int8.
+# Packaged builds bundle Parakeet only — it is guaranteed present, so the
+# dev-time Moonshine fallback is deliberately NOT shipped (saves ~50 MB).
 if [ ! -f "$SIDECAR/models/silero_vad.onnx" ]; then
   echo ">>> Downloading Silero VAD (~2 MB)…"
   curl -fsSL -o "$SIDECAR/models/silero_vad.onnx" \

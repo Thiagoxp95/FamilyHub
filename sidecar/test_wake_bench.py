@@ -6,38 +6,29 @@ Run with the sidecar venv:
 Exits 0 if all cases pass, 1 otherwise.
 """
 import sys
+
 import numpy as np
+
 import wake_bench as wb
 
 
-class FakeStage1:
-    """Stand-in OpenWakeWord stage that fires when peak >= threshold."""
-    def __init__(self, peak):
-        self._peak = peak
-        self.last_fire_score = peak
-
-
 class FakeEngine:
-    """Minimal TwoStageEngine-shaped fake: fires iff `should_fire`, exposes peak."""
-    def __init__(self, should_fire, peak, heard):
-        self._should_fire = should_fire
-        self.stage1 = FakeStage1(peak)
-        self._last_heard = heard
-        self._peak_seen = peak
+    """Duck-types StreamingWakeEngine for classify_clip: feed/reset +
+    observed_peak attribute."""
+
+    def __init__(self, should_fire, peak):
+        self.should_fire = should_fire
+        self.peak = peak
+        self.observed_peak = 0.0
+        self.resets = 0
 
     def reset(self):
-        self._done = False
+        self.resets += 1
+        self.observed_peak = 0.0
 
     def feed(self, pcm_bytes):
-        # Fire exactly once, on the first non-trivial chunk.
-        if self._should_fire and not getattr(self, "_done", False):
-            self._done = True
-            return True
-        return False
-
-    # wake_bench reads the peak via this hook so it works on real + fake engines.
-    def observed_peak(self):
-        return self._peak_seen
+        self.observed_peak = self.peak
+        return self.should_fire
 
 
 def approx(a, b, tol=1e-6):
@@ -45,46 +36,44 @@ def approx(a, b, tol=1e-6):
 
 
 def run():
-    audio = (np.zeros(16000, dtype=np.int16))
-    cases_ok = True
+    audio = np.zeros(16000, dtype=np.int16)
 
-    # classify_clip: a firing engine → "fired"
-    reason, peak, heard = wb.classify_clip(FakeEngine(True, 0.8, "moonshine='hey james'"), audio)
-    ok = reason == "fired"
-    print(f"[{'PASS' if ok else 'FAIL'}] firing engine classified 'fired' (got {reason})")
-    cases_ok &= ok
+    # classify_clip: fire + peak reporting
+    fired, peak = wb.classify_clip(FakeEngine(True, 0.9), audio)
+    assert fired and approx(peak, 0.9), (fired, peak)
+    fired, peak = wb.classify_clip(FakeEngine(False, 0.2), audio)
+    assert not fired and approx(peak, 0.2), (fired, peak)
 
-    # classify_clip: non-firing with peak >= threshold → "stage2_veto"
-    eng = FakeEngine(False, 0.6, "moonshine='hey games'")
-    eng.threshold = 0.32
-    reason, peak, heard = wb.classify_clip(eng, audio)
-    ok = reason == "stage2_veto" and "games" in heard
-    print(f"[{'PASS' if ok else 'FAIL'}] non-fire peak>=thr classified 'stage2_veto' (got {reason})")
-    cases_ok &= ok
+    # bench(): report shape + recall math (contract parsed by promote_model.sh)
+    clips = [("a", audio), ("b", audio)]
+    report = wb.bench(clips, clips, lambda: FakeEngine(True, 0.8))
+    assert report["recall"] == 1.0 and report["positives"] == 2
+    assert report["positives_fired"] == 2 and report["misses"] == []
+    assert report["false_wakes"] == 2  # fires on negatives too
+    assert report["negative_seconds"] > 0 and report["false_wakes_per_hour"] > 0
+    for key in ("recall", "positives", "positives_fired", "false_wakes",
+                "negative_seconds", "false_wakes_per_hour", "misses"):
+        assert key in report, key
 
-    # classify_clip: non-firing with peak < threshold → "stage1_nofire"
-    eng = FakeEngine(False, 0.10, "")
-    eng.threshold = 0.32
-    reason, peak, heard = wb.classify_clip(eng, audio)
-    ok = reason == "stage1_nofire"
-    print(f"[{'PASS' if ok else 'FAIL'}] non-fire peak<thr classified 'stage1_nofire' (got {reason})")
-    cases_ok &= ok
+    report = wb.bench(clips, clips, lambda: FakeEngine(False, 0.15))
+    assert report["recall"] == 0.0 and report["false_wakes"] == 0
+    assert len(report["misses"]) == 2
+    assert report["misses"][0]["reason"] == "nofire"
+    assert approx(report["misses"][0]["peak"], 0.15)
 
-    # bench(): recall + false-wakes/hour math
-    def make_fire(): return FakeEngine(True, 0.9, "moonshine='hey james'")
-    # 2 positives (both fire), 1 negative clip of 2.0 s that fires once.
-    pos = [("p1", np.zeros(16000, np.int16)), ("p2", np.zeros(16000, np.int16))]
-    neg = [("n1", np.zeros(32000, np.int16))]  # 2.0 s @ 16 kHz
-    report = wb.bench(pos, neg, lambda: make_fire())
-    ok = (report["recall"] == 1.0 and report["positives"] == 2 and report["false_wakes"] == 1
-          and approx(report["negative_seconds"], 2.0)
-          and approx(report["false_wakes_per_hour"], 1800.0))
-    print(f"[{'PASS' if ok else 'FAIL'}] bench recall/fp math (got recall={report['recall']} "
-          f"fw/h={report['false_wakes_per_hour']})")
-    cases_ok &= ok
+    # report_from_peaks: threshold math for --roc/--tune
+    pos_rows = [("p1", 0.9, 2.0), ("p2", 0.4, 2.0), ("p3", 0.1, 2.0)]
+    neg_rows = [("n1", 0.5, 2.0), ("n2", 0.05, 2.0)]
+    r = wb.report_from_peaks(pos_rows, neg_rows, 0.3)
+    assert approx(r["recall"], 2 / 3), r["recall"]
+    assert r["false_wakes"] == 1
+    assert [m["name"] for m in r["misses"]] == ["p3"]
+    r = wb.report_from_peaks(pos_rows, neg_rows, 0.95)
+    assert r["recall"] == 0.0 and r["false_wakes"] == 0
 
-    return cases_ok
+    print("OK")
+    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(0 if run() else 1)
+    sys.exit(run())

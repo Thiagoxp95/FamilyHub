@@ -1,15 +1,16 @@
-# Wake-word engines. Torch-free at RUNTIME (training uses torch but is off-device):
-#   openwakeword (default Stage-1 candidate detector) — custom ONNX "hey james"
-#     model over onnxruntime; ships its own melspectrogram/embedding preprocessors.
-#   sherpa-onnx — Stage-2 confirm: a Moonshine tiny.en offline recognizer free-decodes
-#     the post-trigger tail to confirm the distinctive word was actually spoken.
-#   vosk (fallback wake engine) — offline ASR constrained to a keyword grammar.
-# numpy is used by every engine and selftest.py.
+# Wake-word engine. Torch-free at RUNTIME (training uses torch but is off-device):
+#   livekit-wakeword — single-stage conv-attention wake classifier over the
+#     frozen Google speech-embedding front-end (mel + embedding ONNX models are
+#     bundled inside the wheel; onnxruntime CPU only). Replaces the old
+#     openwakeword + sherpa-onnx(Moonshine/Whisper) + vosk two-stage chain.
+# numpy is used by the engine, the bench and selftest.py.
 # Pinned to the versions baked into the shipped sidecar runtime
 # (scripts/build-sidecar-runtime.sh) so packaged builds are reproducible.
-# onnxruntime is a transitive dep of openwakeword; pinned explicitly.
-openwakeword==0.6.0
-sherpa-onnx==1.13.2
-vosk==0.3.44
+livekit-wakeword==0.2.1
 numpy==2.4.6
 onnxruntime==1.26.0
+
+# Ambient transcription (ambient_transcriber.py), NOT wake: Silero VAD +
+# Parakeet-TDT/Moonshine offline decode both run on sherpa-onnx. The wake
+# engine above no longer uses it — remove only if ambient mode is removed.
+sherpa-onnx==1.13.2

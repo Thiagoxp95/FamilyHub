@@ -14,7 +14,8 @@ sidecar/.venv/
 # Self-contained Python runtime bundled into packaged builds (built by
 # apps/electron/scripts/build-sidecar-runtime.sh; ~200 MB).
 sidecar/.runtime/
-# Ignore downloaded models, but keep the committed openWakeWord wake model.
+# Ignore backup/scratch models, but keep the committed wake classifier
+# (livekit-wakeword conv-attention ONNX).
 sidecar/models/*
 !sidecar/models/hey_james.onnx
 __pycache__/
@@ -27,8 +28,6 @@ sidecar/training/data/
 sidecar/training/my_custom_model/
 sidecar/training/smoke_model/
 sidecar/training/piper-sample-generator/
-sidecar/training/dl.py
-sidecar/training/smoke.yml
 
 # Stray bundled main-process build artifact (real entry is apps/electron/out/main/index.js)
 /index.js

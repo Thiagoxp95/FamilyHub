@@ -4,6 +4,7 @@ import { CalendarPanel } from "./CalendarPanel";
 import { FamilySetup } from "./FamilySetup";
 import { familySetupTransition } from "./familySetupControl";
 import { MicPicker } from "./MicPicker";
+import { pickPreferredMicId } from "./micSelection";
 import { NotesPanel } from "./NotesPanel";
 import { RemindersPanel } from "./RemindersPanel";
 import { type ActiveCard, SuggestionCard } from "./SuggestionCard";
@@ -87,6 +88,14 @@ export function App(): React.JSX.Element {
     setMicDeviceId(deviceId);
     saveMicId(deviceId);
   }, []);
+
+  // Brute-force external-USB pin: whenever a real external mic is plugged in,
+  // capture uses it — overriding both the OS default and the saved pick. The
+  // saved pick only matters when no external mic is present. (Labels appear
+  // after the first getUserMedia grant, so this converges on the second pass:
+  // loop starts on saved/default → onReady refreshes devices with labels →
+  // effectiveMicId flips to the USB mic → the capture effect rebuilds onto it.)
+  const effectiveMicId = pickPreferredMicId(audioInputs, micDeviceId);
 
   // Bumping this forces the capture effect to tear down and rebuild the whole
   // getUserMedia → AudioContext graph, even when the device id is unchanged.
@@ -219,7 +228,7 @@ export function App(): React.JSX.Element {
     );
 
     const cleanup = startMicrophoneLoop({
-      deviceId: micDeviceId,
+      deviceId: effectiveMicId,
       onError: setErrorMessage,
       onLevel: () => {},
       // Labels are available now that the mic is granted — refresh so the
@@ -239,7 +248,7 @@ export function App(): React.JSX.Element {
       void cleanup.then((stop) => stop());
     };
   }, [
-    micDeviceId,
+    effectiveMicId,
     captureEpoch,
     familySetupOpen,
     refreshAudioInputs,
@@ -327,10 +336,12 @@ export function App(): React.JSX.Element {
       {/* Seamless top-left corner (clears the inset traffic lights): pick which
           microphone listens for the wake word. */}
       <div className="mic-corner">
+        {/* Shows the EFFECTIVE input: when an external USB mic is plugged in
+            it is auto-pinned and wins over any manual pick (micSelection.ts). */}
         <MicPicker
           devices={audioInputs}
           onChange={handleMicChange}
-          selectedDeviceId={micDeviceId}
+          selectedDeviceId={effectiveMicId}
         />
         <button
           className="family-voices-btn"

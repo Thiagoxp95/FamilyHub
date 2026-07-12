@@ -1,0 +1,81 @@
+# VoxCPM2 accented-positive pass for hey_james_v2.
+# Generates "hey james" positives (and confusable negatives) spoken by
+# voice-designed personas with Brazilian-Portuguese-accented English — the
+# owner's accent class, which piper's LibriTTS speakers do not cover.
+# Output is merged into output/hey_james_v2/{positive,negative}_{train,test}
+# before `augment` runs on hey_james_v2.yaml.
+model_name: hey_james_v2_voxcpm
+target_phrases:
+  - "hey james"
+
+n_samples: 4000
+n_samples_val: 800
+n_background_samples: 0
+n_background_samples_val: 0
+tts_backend: voxcpm
+tts_batch_size: 16
+
+custom_negative_phrases:
+  - "hey jason"
+  - "jason"
+  - "james"
+  - "hey jane"
+  - "hey shane"
+  - "hey jamie"
+  - "hey games"
+  - "hey gems"
+  - "hey jams"
+  - "hey chains"
+  - "hey change"
+  - "hey dave"
+  - "a james"
+  - "okay james"
+
+voxcpm_tts:
+  voice_design_prompts:
+    - "A middle-aged man speaking English with a strong Brazilian Portuguese accent, warm baritone, moderate pace"
+    - "A middle-aged man speaking English with a slight Brazilian Portuguese accent, clear voice, conversational pace"
+    - "A young adult man speaking English with a Brazilian Portuguese accent, light tenor, quick casual pace"
+    - "A young adult man speaking English with a heavy Portuguese accent, relaxed tone, slower pace"
+    - "A man in his thirties speaking English with a Brazilian accent, tired end-of-day voice, subdued energy"
+    - "A man in his thirties speaking English with a Brazilian accent, calling out from across a room, raised voice"
+    - "A young adult woman speaking English with a Brazilian Portuguese accent, bright tone, medium pace"
+    - "A young adult woman speaking English with a slight Brazilian accent, soft gentle voice, slower pace"
+    - "A middle-aged woman speaking English with a Brazilian Portuguese accent, confident mid-pitch, even pace"
+    - "A middle-aged woman speaking English with a Portuguese accent, casual kitchen conversation tone"
+    - "A woman speaking English with a Brazilian accent, calling out loudly from a distance"
+    - "A child speaking English with a slight Brazilian Portuguese accent, high pitch, playful energetic pace"
+    - "A teenager speaking English with a Brazilian accent, casual mumbling delivery, medium pace"
+    - "An older man speaking English with a strong Portuguese accent, gravelly low voice, slow deliberate pace"
+    - "An older woman speaking English with a Portuguese accent, kind soft voice, slower pace"
+    - "A man speaking English with a Spanish accent, warm mid-pitch, conversational pace"
+    - "A woman speaking English with a Spanish accent, clear bright voice, medium pace"
+    - "A man speaking English with a French accent, smooth baritone, moderate pace"
+    - "A woman speaking English with an Indian accent, precise articulation, medium pace"
+    - "A man speaking English with a slight German accent, businesslike delivery, steady pace"
+  cfg_values: [1.5, 2.0, 2.5]
+  inference_timesteps_list: [10, 12]
+
+noise_scales: [0.98]
+noise_scale_ws: [0.98]
+length_scales: [0.75, 1.0, 1.25]
+slerp_weights: [0.2, 0.35, 0.5, 0.65, 0.8]
+
+data_dir: /Users/tedyeng1/.familyhub/lkww-train/work/data
+output_dir: /Users/tedyeng1/.familyhub/lkww-train/work/output
+
+augmentation:
+  clip_duration: 2.0
+  batch_size: 16
+  rounds: 3
+  background_paths:
+    - /Users/tedyeng1/.familyhub/lkww-train/work/data/backgrounds
+  rir_paths:
+    - /Users/tedyeng1/.familyhub/lkww-train/work/data/rirs
+
+model:
+  model_type: conv_attention
+  model_size: medium
+
+steps: 50000
+target_fp_per_hour: 0.2

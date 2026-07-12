@@ -1,6 +1,6 @@
 {
   "name": "@family-hub/electron",
-  "version": "0.0.21",
+  "version": "0.0.22",
   "private": true,
   "type": "module",
   "main": "./out/main/index.js",
@@ -65,7 +65,9 @@
           "!**/.git",
           "!**/.git/**",
           "!**/__pycache__/**",
-          "!**/*.pyc"
+          "!**/*.pyc",
+          "!models/sherpa-onnx-*/**",
+          "!models/vosk-model-*/**"
         ]
       }
     ],
