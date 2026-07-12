@@ -2309,3 +2309,69 @@ body.hub-modal-open {
   font-weight: 650;
   line-height: 1;
 }
+
+/* ---------- Ambient suggestion card ---------- */
+/* Fixed bottom-right toast for TriggerEngine/SuggestionService nudges.
+   z-index 40 sits above the dashboard grid and the fixed corner badges (30)
+   but below the Family Setup overlay (50) and fullscreen panels (100/110) —
+   a suggestion should never block a modal that's already open. */
+.ambient-suggestion {
+  animation: ambient-suggestion-in 0.22s ease both;
+  background: rgba(8, 10, 18, 0.92);
+  backdrop-filter: blur(28px) saturate(160%);
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  border: 1px solid var(--hub-stroke);
+  border-radius: var(--hub-radius-sm);
+  box-shadow: var(--hub-shadow);
+  display: grid;
+  gap: 14px;
+  inset-block-end: 24px;
+  inset-inline-end: 24px;
+  max-width: 420px;
+  padding: 20px 22px;
+  position: fixed;
+  z-index: 40;
+}
+
+.ambient-suggestion__text {
+  color: var(--hub-text);
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.ambient-suggestion__hint {
+  color: var(--hub-text-2);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.ambient-suggestion__actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.ambient-suggestion__accept,
+.ambient-suggestion__dismiss {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 20px;
+}
+
+@keyframes ambient-suggestion-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambient-suggestion {
+    animation: none;
+  }
+}

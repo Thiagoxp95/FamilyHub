@@ -6,6 +6,7 @@ import { familySetupTransition } from "./familySetupControl";
 import { MicPicker } from "./MicPicker";
 import { NotesPanel } from "./NotesPanel";
 import { RemindersPanel } from "./RemindersPanel";
+import { type ActiveCard, SuggestionCard } from "./SuggestionCard";
 import { UpdateControl } from "./UpdateControl";
 import { WeatherPanel } from "./WeatherPanel";
 
@@ -62,6 +63,7 @@ export function App(): React.JSX.Element {
   const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
   const [micDeviceId, setMicDeviceId] = useState<string>(loadSavedMicId);
   const [familySetupOpen, setFamilySetupOpen] = useState(false);
+  const [suggestion, setSuggestion] = useState<ActiveCard | null>(null);
   const playerRef = useRef<AudioPlayer | null>(null);
 
   // Device labels are only populated once a getUserMedia grant has happened, so
@@ -165,6 +167,13 @@ export function App(): React.JSX.Element {
           player.stop();
           break;
         case "turnComplete":
+          break;
+        case "suggestion":
+          setSuggestion({ id: event.id, kind: event.kind, text: event.text });
+          playSuggestionChime();
+          break;
+        case "suggestionResolved":
+          setSuggestion((current) => (current?.id === event.id ? null : current));
           break;
       }
     });
@@ -426,6 +435,20 @@ export function App(): React.JSX.Element {
             if (plan.listening === "start") void window.familyHub.assistant.startListening();
             if (plan.bumpCapture) setCaptureEpoch((e) => e + 1);
             setFamilySetupOpen(false);
+          }}
+        />
+      ) : null}
+
+      {suggestion ? (
+        <SuggestionCard
+          card={suggestion}
+          onAccept={(id) => {
+            setSuggestion(null);
+            void window.familyHub.assistant.suggestionAction(id, "accept");
+          }}
+          onDismiss={(id) => {
+            setSuggestion(null);
+            void window.familyHub.assistant.suggestionAction(id, "dismiss");
           }}
         />
       ) : null}
@@ -870,6 +893,35 @@ function createAudioPlayer(): AudioPlayer {
 function parseSampleRate(mimeType: string): number {
   const match = /rate=(\d+)/.exec(mimeType);
   return match ? Number(match[1]) : 24000;
+}
+
+// Soft two-tone chime that announces an ambient suggestion card without
+// pulling in an audio asset. Opens its own short-lived AudioContext (separate
+// from the live-reply player) and lets it close once the tones finish.
+function playSuggestionChime(): void {
+  try {
+    const AudioContextConstructor = window.AudioContext ?? window.webkitAudioContext;
+    const context = new AudioContextConstructor();
+    const toneMs = 120;
+
+    [880, 1320].forEach((frequency, index) => {
+      const startAt = context.currentTime + (index * toneMs) / 1000;
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = "sine";
+      oscillator.frequency.value = frequency;
+      gain.gain.value = 0.08;
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(startAt);
+      oscillator.stop(startAt + toneMs / 1000);
+    });
+
+    window.setTimeout(() => void context.close().catch(() => {}), toneMs * 2 + 50);
+  } catch {
+    // WebAudio unavailable — the visual card still appears, so this is
+    // best-effort only.
+  }
 }
 
 export function calculateMicrophoneLevel(samples: Float32Array): number {
