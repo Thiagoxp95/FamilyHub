@@ -1,0 +1,50 @@
+{"window":"[17:02] Did you see the invite for Jonas's party?\n[17:02] Yeah it's at the Andersons' place.\n[17:03] We should figure out what day that is.\n[17:03] It's Saturday, July 18th, at 2pm.","expect":true,"kind":"reminder","note":"explicit event with date and time, worth a reminder"}
+{"window":"[09:10] I need to call and reschedule Mia's dentist appointment.\n[09:11] Didn't you already call?\n[09:11] No I keep forgetting, it's supposed to be next Tuesday at 10am.","expect":true,"kind":"reminder","note":"dentist appointment with a concrete date/time, easy to forget"}
+{"window":"[07:45] Can you get Noah from school today, pickup is at 3:30 instead of the usual time.\n[07:46] Oh right, early dismissal.","expect":true,"kind":"calendar","note":"one-off schedule change for school pickup today"}
+{"window":"[19:20] The electric bill is due on the 25th, I haven't paid it yet.\n[19:21] Ugh, I always forget that one.","expect":true,"kind":"reminder","note":"bill due date explicitly stated and unpaid"}
+{"window":"[12:05] I finally booked a haircut for Thursday at 4.\n[12:05] About time, your hair's getting long.","expect":true,"kind":"reminder","note":"future appointment with day and time"}
+{"window":"[08:15] My annual physical got moved to next Monday morning at 9.\n[08:16] Do you need me to drive you?\n[08:16] No I'll drive myself, just don't want to forget it.","expect":true,"kind":"calendar","note":"rescheduled doctor appointment, speaker explicitly worried about forgetting"}
+{"window":"[16:40] The PTA meeting got pushed to next Wednesday evening at 7.\n[16:41] I might actually be able to make that one.","expect":true,"kind":"calendar","note":"future meeting with day and time"}
+{"window":"[14:02] How far is it from here to Grandma's house?\n[14:02] I think it's about two hours by car.","expect":true,"kind":"question","note":"factual distance question left uncertain, assistant could answer precisely"}
+{"window":"[07:30] Is it supposed to rain later today?\n[07:30] I'm not sure, I didn't check.","expect":true,"kind":"question","note":"weather question nobody has answered"}
+{"window":"[18:12] How many cups are in a liter again?\n[18:12] No idea, I always mix that up.","expect":true,"kind":"question","note":"unit conversion question left unanswered"}
+{"window":"[20:05] What's the capital of Australia?\n[20:05] Isn't it Sydney? Or is it Canberra?","expect":true,"kind":"question","note":"general fact question with disagreement, assistant can settle it"}
+{"window":"[13:22] How long does it take to drive to the airport from here at this time of day?\n[13:22] Depends on traffic, could be forty minutes or an hour.","expect":true,"kind":"question","note":"travel time question with only a vague guess given"}
+{"window":"[21:10] Wait, how many ounces are in a pound?","expect":true,"kind":"question","note":"unit conversion fact question, no answer given"}
+{"window":"[06:55] We're out of milk again.\n[06:55] Already? We just bought some.\n[06:56] I used the last of it in the pancakes this morning.","expect":true,"kind":"shopping","note":"explicit out-of-stock statement"}
+{"window":"[10:30] The laundry detergent is almost empty, this is the last load it can do.","expect":true,"kind":"shopping","note":"running low, will need to restock soon"}
+{"window":"[07:02] We're down to the last few scoops of coffee.\n[07:02] That's not good, you need that before work.","expect":true,"kind":"shopping","note":"running low on a household staple"}
+{"window":"[17:55] I just realized we don't have any eggs left for breakfast tomorrow.","expect":true,"kind":"shopping","note":"out of stock, needed soon"}
+{"window":"[15:40] Can you add paper towels to the list, we're almost out.","expect":true,"kind":"shopping","note":"explicit ask to add an item to a shopping list"}
+{"window":"[08:40] O sabao de lavar prato acabou.\n[08:40] Wait, we're out of dish soap?\n[08:41] Yeah, need to buy more today.","expect":true,"kind":"shopping","note":"PT-EN code-switch, out of dish soap"}
+{"window":"[18:30] A festa do aniversario da Sofia e sabado que vem.\n[18:31] Right, her birthday party, we need to remember that.\n[18:31] It's at 3pm at the park.","expect":true,"kind":"reminder","note":"PT-EN code-switch, birthday party with day and time"}
+{"window":"[12:00] Como foi seu dia no trabalho?\n[12:00] Pretty good, kind of tiring though.\n[12:01] Mine was fine, nothing special happened.","expect":false,"kind":null,"note":"casual chit-chat about the day, PT-EN code-switch, nothing actionable"}
+{"window":"[19:00] I like this new couch a lot.\n[19:00] Yeah it's comfy.","expect":false,"kind":null,"note":"chit-chat about furniture"}
+{"window":"[08:00] Did you sleep okay?\n[08:00] Not really, kept waking up.","expect":false,"kind":null,"note":"chit-chat about sleep"}
+{"window":"[16:15] This song is pretty catchy.\n[16:15] Yeah I like this album.","expect":false,"kind":null,"note":"chit-chat about music"}
+{"window":"[21:30] I think I'll read a bit before bed.\n[21:30] Good idea, I'm pretty tired too.","expect":false,"kind":null,"note":"chit-chat, no actionable content"}
+{"window":"[17:10] I'm so stressed about work lately.\n[17:10] I'm sorry, that sounds rough.\n[17:11] Yeah it's just been a lot.","expect":false,"kind":null,"note":"emotional venting, nothing to trigger"}
+{"window":"[09:45] I'm really proud of how the presentation went yesterday.\n[09:45] You should be, you worked hard on it.","expect":false,"kind":null,"note":"past event plus emotion, not a forward-looking task"}
+{"window":"[20:15] I've been feeling kind of anxious about the move.\n[20:15] That's totally normal, it's a big change.","expect":false,"kind":null,"note":"emotional support conversation"}
+{"window":"[14:50] I'm just really happy today for no reason.\n[14:50] That's great, I love that for you.","expect":false,"kind":null,"note":"positive emotion chit-chat"}
+{"window":"[19:40] And now back to our regularly scheduled program.\n[19:40] Can you turn that down a bit?","expect":false,"kind":null,"note":"TV audio bleeding into the transcript"}
+{"window":"[20:50] Breaking news tonight, officials say the storm will pass by morning.\n[20:51] Oh that's on the news again.","expect":false,"kind":null,"note":"TV news audio about weather, not a personal question"}
+{"window":"[18:05] Coming up next, the weather forecast for your weekend.\n[18:05] Turn it up, I want to hear the forecast.","expect":false,"kind":null,"note":"media segment about weather, not a direct question to answer"}
+{"window":"[21:00] Tonight on the show, our host visits three amazing restaurants.\n[21:00] This episode looks good.","expect":false,"kind":null,"note":"background TV chatter"}
+{"window":"[17:20] Okay next add two cups of flour and mix well.\n[17:21] Got it, mixing now.","expect":false,"kind":null,"note":"recipe narration, not a request"}
+{"window":"[18:00] Now preheat the oven to 350 degrees for twenty minutes.\n[18:00] Okay I'll set a timer on my phone.","expect":false,"kind":null,"note":"recipe step, timer already handled by the person themselves"}
+{"window":"[12:30] Stir the sauce for about five minutes until it thickens.\n[12:30] Looks like it's getting there.","expect":false,"kind":null,"note":"recipe narration"}
+{"window":"[19:15] Let it rest for ten minutes before slicing.\n[19:15] Smells amazing already.","expect":false,"kind":null,"note":"recipe step, no assistant action needed"}
+{"window":"[16:00] Vroom vroom, o carro de corrida esta ganhando!\n[16:00] No fair, do it again!","expect":false,"kind":null,"note":"kids playing pretend, PT-EN code-switch"}
+{"window":"[15:30] I'm the dragon and you're the knight!\n[15:30] Rawr, I'm gonna get you!","expect":false,"kind":null,"note":"kids playing pretend"}
+{"window":"[17:45] Tag, you're it!\n[17:45] No fair you cheated!","expect":false,"kind":null,"note":"kids playing tag"}
+{"window":"[14:10] Look I built a tower with all the blocks!\n[14:10] Wow that's so tall, don't knock it over.","expect":false,"kind":null,"note":"kids playing with blocks"}
+{"window":"[11:00] What time does the pharmacy close today?\n[11:00] It closes at 9pm, I checked earlier.\n[11:01] Oh okay good, thanks.","expect":false,"kind":null,"note":"question already answered within the window"}
+{"window":"[13:40] How far is the new gym from here?\n[13:40] It's like ten minutes away, I looked it up yesterday.\n[13:41] Cool, not bad at all.","expect":false,"kind":null,"note":"distance question already resolved by another family member"}
+{"window":"[09:20] Did we already pay the water bill this month?\n[09:20] Yeah I paid it online on Monday.\n[09:21] Perfect, one less thing to worry about.","expect":false,"kind":null,"note":"bill already handled, no reminder needed"}
+{"window":"[18:45] What's the capital of Canada again?\n[18:45] Ottawa, we just looked that up for Noah's homework.\n[18:45] Right, I remember now.","expect":false,"kind":null,"note":"fact already answered, closed loop"}
+{"window":"[12:20] Lembra da festa do Jonas mes passado? Foi muito divertida.\n[12:20] Yeah, the bounce house was a hit.","expect":false,"kind":null,"note":"discussing a PAST party, PT-EN code-switch, nothing to schedule"}
+{"window":"[10:10] I finally went to the dentist last week, all good.\n[10:10] Glad to hear that, no more putting it off.","expect":false,"kind":null,"note":"dentist visit already completed"}
+{"window":"[15:00] We paid off that bill last month, feels good.\n[15:00] Yeah one less thing hanging over us.","expect":false,"kind":null,"note":"bill already paid, past event"}
+{"window":"[08:30] Do you remember how far we drove to get to the cabin last summer?\n[08:30] It felt like forever, maybe three hours.","expect":false,"kind":null,"note":"reminiscing about a past trip, not a live question needing an answer"}
+{"window":"[19:55] We used to be out of milk all the time before we started the delivery service.\n[19:55] Right, glad we don't have that problem anymore.","expect":false,"kind":null,"note":"past problem, now resolved, currently well-stocked"}

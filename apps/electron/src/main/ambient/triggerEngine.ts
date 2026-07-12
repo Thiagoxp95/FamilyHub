@@ -31,6 +31,10 @@ export interface TriggerEngineOptions {
   now?: () => number; // injectable clock for tests
 }
 
+// SYNC: scripts/trigger-bench.mjs keeps its own copy of TRIGGER_SCHEMA and
+// the SYSTEM_PROMPT_PREFIX/SUFFIX below (it can't import this Electron-main
+// module from plain Node) — if you edit either here, mirror the edit there
+// and re-run `node scripts/trigger-bench.mjs`.
 const TRIGGER_SCHEMA = {
   type: "object",
   properties: {
@@ -45,17 +49,30 @@ const TRIGGER_SCHEMA = {
 
 const SYSTEM_PROMPT_PREFIX =
   "You watch a rolling transcript of a family's kitchen conversation. Decide " +
-  "whether the voice assistant (James) could usefully offer help RIGHT NOW " +
-  "based on the LAST thing said, using the rest as context. Today is ";
+  "whether the voice assistant (James) could usefully offer help RIGHT NOW, " +
+  "focusing on the most recent topic and using the rest as context. Today is ";
 
-const SYSTEM_PROMPT_SUFFIX = `.
+const SYSTEM_PROMPT_SUFFIX = `. The family mixes English and Portuguese; treat both the same.
 
-Trigger ONLY for:
-- A commitment/date/task someone might forget (suggest a reminder or calendar event; payload {"title", "due" ISO local}).
-- A factual question someone asked aloud that an assistant could answer (kind "question"; payload {"question"}).
-- Something to buy or restock (kind "shopping"; payload {"item"}).
+Set trigger true (confidence 0.8 or higher) when the transcript contains ANY of:
+1. A FUTURE commitment, appointment, or deadline: a party, doctor/dentist visit, school pickup, meeting, haircut, or bill due date (kind "reminder" or "calendar"; payload {"title", "due" ISO local}). Capturing it as a reminder helps even when the speakers sound organized, and even when the last line is just someone acknowledging it.
+2. A factual question asked aloud (distance, weather, unit conversion, general facts, travel time) that nobody answered CONFIDENTLY (kind "question"; payload {"question"}). "I think...", "not sure", "maybe", "depends" are guesses, not answers — still trigger.
+3. A household item that is out, almost out, or running low, or an explicit ask to buy something or add it to a list (kind "shopping"; payload {"item"}). Using up the last of something counts — that means it needs restocking.
 
-Do NOT trigger on chit-chat, opinions, emotions, media playing in the background, or anything already handled. Be conservative: a wrong suggestion is worse than a missed one. suggestion is one short sentence, e.g. "Create a reminder: Jonas's party, Saturday July 18?"`;
+Set trigger false ONLY for:
+- Chit-chat, opinions, feelings, or emotional support.
+- TV/radio/media audio in the background, or kids playing pretend.
+- Recipe or instruction steps being read aloud.
+- Strictly PAST or already-handled things: events that already happened, bills already paid, questions already answered confidently in the transcript.
+
+Examples:
+"We're out of milk again." -> {"trigger": true, "kind": "shopping", "confidence": 0.9, "suggestion": "Add milk to the shopping list?", "payload": {"item": "milk"}}
+"Jonas's party is Saturday July 18th at 2pm." -> {"trigger": true, "kind": "reminder", "confidence": 0.9, "suggestion": "Create a reminder: Jonas's party, Saturday July 18, 2pm?", "payload": {"title": "Jonas's party", "due": "2026-07-18T14:00:00"}}
+"How far is it to Grandma's house?" / "I think about two hours." -> {"trigger": true, "kind": "question", "confidence": 0.85, "suggestion": "Want me to check the distance to Grandma's house?", "payload": {"question": "How far is it to Grandma's house?"}}
+"I'm so stressed about work lately." / "That sounds rough." -> {"trigger": false, "kind": "other", "confidence": 0.9, "suggestion": "", "payload": {}}
+"Did we pay the water bill?" / "Yes, I paid it Monday." -> {"trigger": false, "kind": "other", "confidence": 0.9, "suggestion": "", "payload": {}}
+
+If the transcript matches one of the three trigger categories, prefer trigger true. suggestion is one short sentence.`;
 
 interface ParsedTriggerResult {
   trigger: boolean;
