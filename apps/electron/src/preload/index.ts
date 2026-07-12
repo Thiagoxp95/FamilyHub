@@ -37,6 +37,8 @@ contextBridge.exposeInMainWorld("familyHub", {
       ipcRenderer.send("assistant:micFrame", frame);
     },
     endLive: () => ipcRenderer.invoke("assistant:endLive") as Promise<boolean>,
+    suggestionAction: (id: number, action: "accept" | "dismiss") =>
+      ipcRenderer.invoke("assistant:suggestionAction", id, action) as Promise<boolean>,
     onLive: (callback: (event: unknown) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
         callback(payload);

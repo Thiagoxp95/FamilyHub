@@ -55,7 +55,13 @@ export type LiveStateEvent =
     }
   | { type: "localHeard"; text: string; phase: string }
   | { type: "interrupted" }
-  | { type: "turnComplete" };
+  | { type: "turnComplete" }
+  | { type: "suggestion"; id: number; kind: string; text: string }
+  | {
+      type: "suggestionResolved";
+      id: number;
+      status: "accepted" | "dismissed" | "expired";
+    };
 
 // How the controller talks back to the renderer and the snapshot panels.
 export interface LiveControllerSink {

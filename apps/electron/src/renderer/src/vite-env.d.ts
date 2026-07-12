@@ -31,7 +31,13 @@ type LiveStateEvent =
   | { type: "listener"; state: "loading" | "ready" | "offline"; detail?: string }
   | { type: "localHeard"; text: string; phase: string }
   | { type: "interrupted" }
-  | { type: "turnComplete" };
+  | { type: "turnComplete" }
+  | { type: "suggestion"; id: number; kind: string; text: string }
+  | {
+      type: "suggestionResolved";
+      id: number;
+      status: "accepted" | "dismissed" | "expired";
+    };
 
 interface LiveAudioChunk {
   data: string;
@@ -45,6 +51,7 @@ interface AssistantBridge {
   stopListening: () => Promise<AssistantSnapshot>;
   sendMicFrame: (frame: string) => void;
   endLive: () => Promise<boolean>;
+  suggestionAction: (id: number, action: "accept" | "dismiss") => Promise<boolean>;
   onLive: (callback: (event: LiveStateEvent) => void) => () => void;
   onLiveAudio: (callback: (chunk: LiveAudioChunk) => void) => () => void;
 }

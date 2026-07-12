@@ -34,6 +34,8 @@ import { MemoryStore, type SearchOptions, type UtteranceSource } from "../ambien
 import { createOllamaClient, type OllamaClient } from "../ambient/ollama";
 import { EmbedWorker } from "../ambient/embedWorker";
 import { scheduleDigest } from "../ambient/factsDigest";
+import { TriggerEngine } from "../ambient/triggerEngine";
+import { SuggestionService } from "../ambient/suggestionService";
 import type { AssistantSnapshot } from "./types";
 import type { AgentEvent, AgentReminder } from "./calendarTools";
 import type { DashboardController, DashboardPanel } from "../dashboard/ipc";
@@ -418,6 +420,29 @@ export function registerAssistantIpc(
     }
   };
 
+  // "Can James help right now?" pipeline: TriggerEngine classifies the rolling
+  // ambient window after every utterance and hands candidate suggestions to
+  // SuggestionService, which shows a one-at-a-time on-screen card (tap or
+  // voice to accept/dismiss). Both are only constructed when the memory store
+  // is available — with no store, addSuggestion/setSuggestionStatus have
+  // nowhere to persist to, so the whole feature stays inert.
+  let trigger: TriggerEngine | null = null;
+  const suggestions = memoryBundle
+    ? new SuggestionService({
+        store: memoryBundle.store,
+        sendLive,
+        runTool,
+        onDismissed: () => trigger?.noteDismissed(),
+      })
+    : null;
+  trigger = memoryBundle
+    ? new TriggerEngine({
+        store: memoryBundle.store,
+        ollama: memoryBundle.ollama,
+        onSuggestion: (suggestion) => suggestions?.show(suggestion),
+      })
+    : null;
+
   const sidecarScript = resolveSidecarScript();
   // Open to anyone: wake word → connect straight to Gemini, which streams the mic
   // continuously and uses its own (server-side) VAD for turn-taking. No speaker
@@ -439,6 +464,8 @@ export function registerAssistantIpc(
             ? {
                 onAmbientUtterance: (u: AmbientUtterance): void => {
                   storeQuietly(u.text, "ambient", Math.round(u.t1 * 1000));
+                  suggestions?.handleVoice(u.text);
+                  trigger?.handleUtterance(u.text);
                 },
               }
             : {}),
@@ -492,6 +519,28 @@ export function registerAssistantIpc(
     await controller?.endLive();
     return true;
   });
+
+  // Tap-to-accept / tap-to-dismiss for the ambient suggestion card.
+  ipcMain.handle(
+    "assistant:suggestionAction",
+    async (_event, id: unknown, action: unknown) => {
+      if (!suggestions || typeof id !== "number") {
+        return false;
+      }
+
+      if (action === "accept") {
+        await suggestions.accept(id);
+        return true;
+      }
+
+      if (action === "dismiss") {
+        suggestions.dismiss(id);
+        return true;
+      }
+
+      return false;
+    },
+  );
 
   // ----- Enrollment IPC handlers -----
   const enrollment = new EnrollmentStore(join(app.getPath("userData"), "speaker-profiles"));
