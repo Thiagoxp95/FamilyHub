@@ -1,6 +1,7 @@
 import { app, ipcMain, type WebContents } from "electron";
+import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { EnrollmentStore } from "./enrollmentStore";
 import { decodePcm16 } from "./enrollmentIpc";
 import * as calendarTools from "./calendarTools";
@@ -74,7 +75,12 @@ export function registerAssistantIpc(
     }
 
     try {
-      const store = new MemoryStore(join(homedir(), ".familyhub", "memory.sqlite"));
+      const dbPath = join(homedir(), ".familyhub", "memory.sqlite");
+      // A fresh profile has no ~/.familyhub yet — node:sqlite doesn't create
+      // parent directories, so without this the store would throw here and
+      // ambient would silently disable on every first launch.
+      mkdirSync(dirname(dbPath), { recursive: true });
+      const store = new MemoryStore(dbPath);
       const ollama = createOllamaClient();
       new EmbedWorker({ store, ollama }).start();
       return { store, ollama };

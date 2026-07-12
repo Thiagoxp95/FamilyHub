@@ -227,6 +227,14 @@ export class LiveController {
     // interruption with its own server-side VAD. There is no local middleman
     // analysing the audio to decide whether to let the user interrupt — Gemini
     // handles barge-in natively (emitting an `interrupted` event).
+    //
+    // This idle-only routing is also ambient's load-bearing pause: the sidecar
+    // never sees mic frames once a session is live regardless of whether the
+    // {"cmd":"ambient"} control message below has been sent or acknowledged, so
+    // session speech can't leak into ambient capture even if that IPC write is
+    // ever lost or a transcriber implementation ignores it (setAmbient is
+    // optional). connect()/finalize() sending {"cmd":"ambient",on} is
+    // belt-and-braces on top of this, not the primary mechanism.
     if (this.state.phase === "idle") {
       this.transcriber?.write(frame);
     }
@@ -314,6 +322,13 @@ export class LiveController {
     this.sink.sendLive({ type: "mode", mode: "connecting" });
     this.sink.sendLive({ type: "status", message: "Connecting…" });
 
+    // Pause the sidecar's ambient transcriber before Gemini takes over: session
+    // speech is ingested from Gemini's own transcription events instead, so
+    // without this the same speech could be double-transcribed into ambient
+    // memory. handleFrame's idle-only routing (see its comment) is the actual
+    // load-bearing pause; this is belt-and-braces.
+    this.transcriber?.setAmbient?.(false);
+
     debug("connecting to Gemini Live…");
     try {
       await session.start({
@@ -375,6 +390,9 @@ export class LiveController {
     }
 
     this.transcriber?.reset();
+    // Resume ambient capture now that the session is over — the reverse of the
+    // pause in connect().
+    this.transcriber?.setAmbient?.(true);
     // Collapse any full-screen quadrant the session opened, back to the grid.
     this.resetDashboardFocus?.();
     this.sink.noteInfo(`Live session ended (${effectiveReason}).`);

@@ -2,6 +2,7 @@
 
 const EMBED_DIM = 768;
 const CHAT_TIMEOUT_MS = 20_000;
+const EMBED_TIMEOUT_MS = 15_000;
 
 export interface OllamaClient {
   embed(text: string): Promise<Float32Array | null>; // null on any failure
@@ -48,11 +49,14 @@ export function createOllamaClient(options: CreateOllamaClientOptions = {}): Oll
   }
 
   async function embed(text: string): Promise<Float32Array | null> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), EMBED_TIMEOUT_MS);
     try {
       const res = await fetchFn(`${baseUrl}/api/embed`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: embedModel, input: text }),
+        signal: controller.signal,
       });
       if (!res.ok) {
         reportAvailability(false, `HTTP ${res.status}`);
@@ -70,6 +74,8 @@ export function createOllamaClient(options: CreateOllamaClientOptions = {}): Oll
     } catch (err) {
       reportAvailability(false, err);
       return null;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 

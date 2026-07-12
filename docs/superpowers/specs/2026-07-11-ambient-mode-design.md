@@ -144,6 +144,34 @@ Recorded where the shipped code diverged from this spec's wording:
   names, memory tables, trigger schema/threshold, dedupe/cooldown, DB
   location, forget flow) matches the spec as designed.
 
+## Implementation notes (post-hoc, final pre-merge review)
+
+- **The `{"cmd":"ambient","on":bool}` control message is now actually sent.**
+  Earlier in this branch's history, `wake_listener.py` accepted and honored
+  the command, but nothing on the Electron side ever wrote it to the
+  sidecar's stdin — the pause during a live session relied entirely on
+  `liveController.ts`'s idle-only frame routing (mic frames simply stop
+  reaching the sidecar once a session is live). `LiveController` now also
+  calls the transcriber's (optional) `setAmbient(false)` when a session
+  starts connecting and `setAmbient(true)` in `finalize()`, so the doc's
+  original "Electron sends `on:false` on session open, `on:true` on close"
+  claim is true as shipped. The idle-only frame routing remains the primary,
+  load-bearing pause (it works even if a `LocalTranscriber` implementation
+  omits `setAmbient`, or the IPC write is ever lost); the explicit command is
+  belt-and-braces on top of it, not a replacement for it.
+- **Ambient initializes after the wake-ready signal, not before.**
+  `wake_listener.py` emits the `{"type":"partial","text":"","words":[]}`
+  ready signal as soon as the (small, fast) wake engine loads; the ambient
+  transcriber's `AmbientTranscriber.create()` (~600 MB Parakeet load) now
+  runs afterward. Previously the ambient load ran first and delayed the
+  UI's listener-ready state by however long that model took to load, on
+  every launch — with no user-visible benefit, since ambient capture
+  starting a few seconds later than wake detection is unnoticeable.
+- `forget_memory` additionally now refuses degenerate queries (trimmed length
+  < 3 characters) and caps any single call to 50 deletions (most-recent
+  matches first), so a vague "forget that" or a mis-transcribed one-letter
+  query can no longer mass-delete household memory in one shot.
+
 ## Out of scope (deliberately)
 
 - Speaker diarization/attribution of ambient speech (future: match voice embeddings from Family Voices enrollment; schema already has a nullable `speaker` column).

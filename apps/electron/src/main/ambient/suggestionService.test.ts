@@ -342,6 +342,34 @@ describe("SuggestionService", () => {
     consoleError.mockRestore();
   });
 
+  it("logs a traceable line when runTool resolves ok:false (no throw) — the silent-failure case", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const runTool = vi.fn<ToolRunner>().mockResolvedValue({ ok: false, error: "denied" });
+    const { service, sendLive, setStatus } = makeService({ runTool });
+
+    service.show(suggestionFixture());
+    await service.accept(shownId(sendLive));
+
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining("denied"),
+    );
+    // The card must still resolve "accepted" — status enum unchanged.
+    expect(setStatus).toHaveBeenCalledWith(expect.any(Number), "accepted");
+    consoleError.mockRestore();
+  });
+
+  it("does not log when runTool resolves ok:true", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const runTool = vi.fn<ToolRunner>().mockResolvedValue({ ok: true });
+    const { service, sendLive } = makeService({ runTool });
+
+    service.show(suggestionFixture());
+    await service.accept(shownId(sendLive));
+
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
   it("a second show() while one is visible expires the first", () => {
     vi.useFakeTimers();
     const { service, sendLive, setStatus } = makeService();

@@ -57,8 +57,11 @@ promote → rollback) see `training/README.md` § *Personalizing on the owner's 
 
 Newline-delimited over stdio: base64 int16 LINEAR16 @16 kHz frames in (or
 `{"cmd":"reset"}`), `{"type":"partial"|"final","text","words":[]}` JSON out. The
-first line is an empty `partial` ready-signal once the model loads; a transcript
-containing the wake phrase is emitted only when one is confidently detected.
+first line is an empty `partial` ready-signal once the wake engine loads — this
+fires **before** the (optional, ~600 MB) ambient transcriber initializes, so a
+fresh launch's listener-ready state never waits on the larger ambient model; a
+transcript containing the wake phrase is emitted only when one is confidently
+detected.
 
 ## Ambient Mode
 

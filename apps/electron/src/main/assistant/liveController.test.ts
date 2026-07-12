@@ -15,6 +15,7 @@ class FakeTranscriber implements LocalTranscriber {
   handlers: LocalTranscriberHandlers | null = null;
   writes: string[] = [];
   resets = 0;
+  ambientCalls: boolean[] = [];
 
   async start(handlers: LocalTranscriberHandlers): Promise<void> {
     this.handlers = handlers;
@@ -28,6 +29,10 @@ class FakeTranscriber implements LocalTranscriber {
     this.resets += 1;
   }
 
+  setAmbient(on: boolean): void {
+    this.ambientCalls.push(on);
+  }
+
   async stop(): Promise<void> {}
 
   emit(text: string): void {
@@ -36,6 +41,26 @@ class FakeTranscriber implements LocalTranscriber {
 
   emitUtterance(u: AmbientUtterance): void {
     this.handlers?.onUtterance?.(u);
+  }
+}
+
+// A transcriber that does NOT implement the optional setAmbient member, so we
+// can assert the controller never crashes calling it via the optional-chain.
+class FakeTranscriberNoAmbient implements LocalTranscriber {
+  handlers: LocalTranscriberHandlers | null = null;
+
+  async start(handlers: LocalTranscriberHandlers): Promise<void> {
+    this.handlers = handlers;
+  }
+
+  write(): void {}
+
+  reset(): void {}
+
+  async stop(): Promise<void> {}
+
+  emit(text: string): void {
+    this.handlers?.onTranscript({ type: "partial", text, words: [] });
   }
 }
 
@@ -542,5 +567,45 @@ describe("LiveController", () => {
         engine: "moonshine",
       }),
     ).not.toThrow();
+  });
+
+  it("pauses ambient (setAmbient false) when a session starts connecting, resumes (true) on finalize", async () => {
+    const { transcriber, sessions } = await setup();
+
+    transcriber.emit("hey james hello");
+    // "connecting" fires synchronously on wake, before the session opens —
+    // setAmbient(false) must land at that point so session speech isn't
+    // double-transcribed by the ambient path.
+    expect(transcriber.ambientCalls).toEqual([false]);
+
+    await vi.waitFor(() => expect(sessions).toHaveLength(1));
+
+    await new Promise((r) => setTimeout(r, 0));
+    // Still just the initial pause — resume only happens once the session ends.
+    expect(transcriber.ambientCalls).toEqual([false]);
+
+    await sessions[0]?.close();
+    await vi.waitFor(() => expect(transcriber.ambientCalls).toEqual([false, true]));
+  });
+
+  it("does not crash when the transcriber has no setAmbient (optional member)", async () => {
+    const transcriber = new FakeTranscriberNoAmbient();
+    const sessions: FakeSession[] = [];
+    const sink = createSink();
+    const controller = new LiveController({
+      createTranscriber: () => transcriber,
+      createSession: () => {
+        const session = new FakeSession();
+        sessions.push(session);
+        return session;
+      },
+      sink,
+    });
+    await controller.start();
+
+    transcriber.emit("hey james hello");
+    await vi.waitFor(() => expect(sessions).toHaveLength(1));
+
+    await expect(sessions[0]?.close()).resolves.toBeUndefined();
   });
 });

@@ -39,6 +39,12 @@ export interface LocalTranscriber {
   write(pcmBase64: string): void;
   reset(): void;
   stop(): Promise<void>;
+  // Optional: enable/disable the sidecar's ambient transcriber independently
+  // of wake detection, so session speech during a live Gemini call is never
+  // double-transcribed by the ambient path. Not every implementation needs
+  // this (hence optional) — the load-bearing pause is handleFrame's
+  // idle-only frame routing in liveController.ts; this is belt-and-braces.
+  setAmbient?(on: boolean): void;
 }
 
 // Pure: one stdout line → a transcript message, or null if it is not one.
@@ -237,6 +243,10 @@ export class WakeWordSidecar implements LocalTranscriber {
 
   reset(): void {
     this.process?.stdin.write(`${JSON.stringify({ cmd: "reset" })}\n`);
+  }
+
+  setAmbient(on: boolean): void {
+    this.process?.stdin.write(`${JSON.stringify({ cmd: "ambient", on })}\n`);
   }
 
   async stop(): Promise<void> {

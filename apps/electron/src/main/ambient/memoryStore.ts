@@ -326,13 +326,31 @@ export class MemoryStore {
     return [...factHits, ...dedupedRaw];
   }
 
+  // Minimum trimmed query length before forget() will touch the DB at all. A
+  // degenerate query ("that", "e") would otherwise LIKE-match a huge fraction
+  // of household memory and delete it irreversibly — this is the floor below
+  // which we refuse rather than guess at intent.
+  private static readonly FORGET_MIN_QUERY_LENGTH = 3;
+  // Per-call deletion ceiling (across both tables combined), so even a query
+  // that legitimately matches a lot only ever removes the most recent slice
+  // of it in one call, bounding the blast radius of a single "forget" ask.
+  private static readonly FORGET_MAX_DELETIONS = 50;
+
   forget(matchText: string): { deleted: number; texts: string[] } {
+    const trimmed = matchText.trim();
+    if (trimmed.length < MemoryStore.FORGET_MIN_QUERY_LENGTH) {
+      return { deleted: 0, texts: [] };
+    }
+
     const like = `%${escapeLike(matchText)}%`;
     const texts: string[] = [];
+    let remaining = MemoryStore.FORGET_MAX_DELETIONS;
 
     const utteranceRows = this.db
-      .prepare("SELECT id, text FROM utterances WHERE text LIKE ? ESCAPE '\\'")
-      .all(like) as Array<{ id: number | bigint; text: string }>;
+      .prepare(
+        "SELECT id, text FROM utterances WHERE text LIKE ? ESCAPE '\\' ORDER BY ts DESC LIMIT ?",
+      )
+      .all(like, remaining) as Array<{ id: number | bigint; text: string }>;
     for (const row of utteranceRows) {
       texts.push(row.text);
       const id = toNumber(row.id);
@@ -341,17 +359,22 @@ export class MemoryStore {
       }
       this.db.prepare("DELETE FROM utterances WHERE id = ?").run(id);
     }
+    remaining -= utteranceRows.length;
 
-    const factRows = this.db
-      .prepare("SELECT id, text FROM facts WHERE text LIKE ? ESCAPE '\\'")
-      .all(like) as Array<{ id: number | bigint; text: string }>;
-    for (const row of factRows) {
-      texts.push(row.text);
-      const id = toNumber(row.id);
-      if (this.vectorSearchAvailable) {
-        this.db.prepare("DELETE FROM vec_facts WHERE rowid = ?").run(id);
+    if (remaining > 0) {
+      const factRows = this.db
+        .prepare(
+          "SELECT id, text FROM facts WHERE text LIKE ? ESCAPE '\\' ORDER BY ts DESC LIMIT ?",
+        )
+        .all(like, remaining) as Array<{ id: number | bigint; text: string }>;
+      for (const row of factRows) {
+        texts.push(row.text);
+        const id = toNumber(row.id);
+        if (this.vectorSearchAvailable) {
+          this.db.prepare("DELETE FROM vec_facts WHERE rowid = ?").run(id);
+        }
+        this.db.prepare("DELETE FROM facts WHERE id = ?").run(id);
       }
-      this.db.prepare("DELETE FROM facts WHERE id = ?").run(id);
     }
 
     return { deleted: texts.length, texts };

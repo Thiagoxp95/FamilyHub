@@ -174,22 +174,31 @@ export class SuggestionService {
 
     switch (suggestion.kind) {
       case "reminder":
-        await this.runTool(calendarToolNames.createReminder, {
-          title: str(payload.title),
-          due: str(payload.due),
-        });
+        this.reportIfFailed(
+          suggestion,
+          await this.runTool(calendarToolNames.createReminder, {
+            title: str(payload.title),
+            due: str(payload.due),
+          }),
+        );
         return;
       case "calendar":
-        await this.runTool(calendarToolNames.createEvent, {
-          title: str(payload.title),
-          start: str(payload.due),
-        });
+        this.reportIfFailed(
+          suggestion,
+          await this.runTool(calendarToolNames.createEvent, {
+            title: str(payload.title),
+            start: str(payload.due),
+          }),
+        );
         return;
       case "shopping":
-        await this.runTool(calendarToolNames.createReminder, {
-          title: `Buy ${str(payload.item)}`,
-          list: "Groceries",
-        });
+        this.reportIfFailed(
+          suggestion,
+          await this.runTool(calendarToolNames.createReminder, {
+            title: `Buy ${str(payload.item)}`,
+            list: "Groceries",
+          }),
+        );
         return;
       case "question":
       case "other":
@@ -198,5 +207,20 @@ export class SuggestionService {
         // ask") instead of an accept affordance for these kinds.
         return;
     }
+  }
+
+  // ipc.ts's runTool reports most tool failures as a resolved { ok: false,
+  // error } rather than throwing, so a failed create_reminder/create_event
+  // would otherwise be completely silent while the card still resolves
+  // "accepted" (unchanged — see accept()). Log one traceable line so the
+  // failure is at least visible in the field.
+  private reportIfFailed(suggestion: TriggerSuggestion, result: Record<string, unknown>): void {
+    if (result.ok !== false) {
+      return;
+    }
+    const error = typeof result.error === "string" ? result.error : "unknown error";
+    console.error(
+      `[suggestions] accept tool call reported failure for "${suggestion.suggestion}" (${suggestion.kind}): ${error}`,
+    );
   }
 }

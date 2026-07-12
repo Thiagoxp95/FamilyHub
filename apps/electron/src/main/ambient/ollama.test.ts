@@ -63,6 +63,29 @@ describe("createOllamaClient", () => {
 
       expect(result).toBeNull();
     });
+
+    it("resolves null instead of hanging forever when fetch never resolves", async () => {
+      vi.useFakeTimers();
+      try {
+        const fetchFn = vi.fn().mockImplementation(
+          (_url: string, init?: { signal?: AbortSignal }) =>
+            new Promise((_resolve, reject) => {
+              init?.signal?.addEventListener("abort", () => {
+                reject(new DOMException("Aborted", "AbortError"));
+              });
+            }),
+        );
+        const client = createOllamaClient({ fetchFn });
+
+        const pending = client.embed("hello world");
+        await vi.advanceTimersByTimeAsync(15_000);
+        const result = await pending;
+
+        expect(result).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe("chatJSON", () => {

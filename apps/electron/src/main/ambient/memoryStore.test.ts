@@ -144,7 +144,9 @@ describe("MemoryStore", () => {
   it("forget treats a bare % in the query as a literal character, not 'delete everything'", () => {
     store.addUtterance("100% sure", "ambient");
     store.addUtterance("other text", "ambient");
-    const result = store.forget("%");
+    // "100%" (not a bare "%") so the query clears the new min-length guard while
+    // still exercising literal-% escaping.
+    const result = store.forget("100%");
     expect(result.deleted).toBe(1);
     expect(result.texts).toEqual(["100% sure"]);
     expect(store.search(null, "other").map((h) => h.text)).toEqual(["other text"]);
@@ -164,6 +166,34 @@ describe("MemoryStore", () => {
     const result = store.forget("classified info");
     expect(result.deleted).toBe(2);
     expect(result.texts.sort()).toEqual(["classified info here", "classified info here"]);
+  });
+
+  it("forget refuses a degenerate short (<3 char) query and touches nothing", () => {
+    store.addUtterance("we talked about a lot of stuff", "ambient");
+    store.addUtterance("of course, everyone agreed", "ambient");
+    const result = store.forget("of");
+    expect(result).toEqual({ deleted: 0, texts: [] });
+    expect(store.search(null, "of")).toHaveLength(2);
+  });
+
+  it("forget trims whitespace before the length guard", () => {
+    const result = store.forget("  e  ");
+    expect(result).toEqual({ deleted: 0, texts: [] });
+  });
+
+  it("forget caps deletions at 50 rows, deleting only the most recent matches", () => {
+    for (let i = 0; i < 60; i += 1) {
+      store.addUtterance(`match number ${i}`, "ambient", 1000 + i);
+    }
+    const result = store.forget("match number");
+    expect(result.deleted).toBe(50);
+    expect(result.texts).toHaveLength(50);
+    // The 10 oldest matches must survive the cap.
+    const remaining = store.search(null, "match number", { topK: 100 });
+    expect(remaining).toHaveLength(10);
+    const remainingTexts = remaining.map((h) => h.text).sort();
+    const expectedSurvivors = Array.from({ length: 10 }, (_, i) => `match number ${i}`).sort();
+    expect(remainingTexts).toEqual(expectedSurvivors);
   });
 
   it("hasFact reports exact-text fact existence", () => {

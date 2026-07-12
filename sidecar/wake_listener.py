@@ -72,12 +72,16 @@ Protocol (newline-delimited over stdio):
              {"type": "utterance", "text": str, "t0": float, "t1": float,
               "engine": str}                                         (ambient path)
 The first emitted line is {"type":"partial","text":"","words":[]} as a ready
-signal once the model has loaded. A transcript containing the wake phrase is
-emitted only when one is confidently detected. "utterance" lines are emitted
-independently by the ambient transcriber (see ambient_transcriber.py and
-sidecar/README.md § Ambient Mode) whenever ambient capture is enabled and a
-voiced segment finishes; "engine" is "parakeet-tdt-0.6b-v3-int8" or
-"moonshine-tiny" depending on which model is available.
+signal once the wake engine has loaded. This fires BEFORE the (optional, much
+larger — ~600 MB) ambient transcriber loads, so the UI's listener-ready state
+never waits on ambient init; wake detection is fully functional from the ready
+signal onward even while ambient is still loading in the background. A
+transcript containing the wake phrase is emitted only when one is confidently
+detected. "utterance" lines are emitted independently by the ambient
+transcriber (see ambient_transcriber.py and sidecar/README.md § Ambient Mode)
+whenever ambient capture is enabled and a voiced segment finishes; "engine" is
+"parakeet-tdt-0.6b-v3-int8" or "moonshine-tiny" depending on which model is
+available.
 """
 
 import argparse
@@ -688,6 +692,13 @@ def main():
     wake_words = [w.strip().lower() for w in args.wake_words.split(",") if w.strip()]
     engine, description = build_engine(args, wake_words)
 
+    # Emit the ready signal BEFORE loading the (~600 MB) ambient Parakeet model,
+    # so the UI's listener-ready state lands as soon as the wake engine (small,
+    # fast) is up, not gated on the much larger ambient load. Wake detection
+    # works from this point on even while ambient initializes just below.
+    emit({"type": "partial", "text": "", "words": []})  # ready signal
+    dlog(f"wake engine: {description}")
+
     ambient = None
     if os.environ.get("FAMILYHUB_AMBIENT", "1").strip().lower() not in ("0", "off", "false", "no"):
         try:
@@ -696,9 +707,6 @@ def main():
         except Exception as exc:  # noqa: BLE001 - ambient is optional, wake is not
             dlog(f"ambient disabled: {exc}")
     dlog(f"ambient: {'on' if ambient else 'off'}")
-
-    emit({"type": "partial", "text": "", "words": []})  # ready signal
-    dlog(f"wake engine: {description}")
 
     # Emit the FULL wake phrase ("hey james") on every engine, not the bare
     # keyword. The Electron side gates each wake with transcriptContainsWakePhrase
