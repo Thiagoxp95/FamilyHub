@@ -29,7 +29,7 @@ import {
   type LocalTranscriber,
 } from "./localTranscriber";
 import { AssistantService } from "./service";
-import { MemoryStore } from "../ambient/memoryStore";
+import { MemoryStore, type UtteranceSource } from "../ambient/memoryStore";
 import { createOllamaClient } from "../ambient/ollama";
 import { EmbedWorker } from "../ambient/embedWorker";
 import type { AssistantSnapshot } from "./types";
@@ -84,6 +84,33 @@ export function registerAssistantIpc(
 
   const memory = buildMemory();
 
+  // Runtime store writes (synchronous node:sqlite) can throw after a healthy
+  // startup — disk full, WAL lock, etc. These run inside live-session/sidecar
+  // handlers, so a throw here would crash the main process. Swallow, and log
+  // only the first failure (mirroring construction-time resilience) to avoid
+  // one noteInfo line per utterance while the disk stays full.
+  let memoryWriteFailureLogged = false;
+  function storeQuietly(text: string, source: UtteranceSource, ts?: number): void {
+    if (!memory) {
+      return;
+    }
+
+    try {
+      if (ts === undefined) {
+        memory.addUtterance(text, source);
+      } else {
+        memory.addUtterance(text, source, ts);
+      }
+    } catch (error) {
+      if (!memoryWriteFailureLogged) {
+        memoryWriteFailureLogged = true;
+        service.noteInfo(
+          `Ambient memory write failed (further failures muted): ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+  }
+
   // The single renderer we stream live state to. Set when the renderer starts
   // listening; the controller pushes mode/transcript/audio events at it.
   let liveSender: WebContents | null = null;
@@ -104,13 +131,13 @@ export function registerAssistantIpc(
     noteHeard: memory
       ? (text) => {
           service.noteHeard(text);
-          memory.addUtterance(text, "session_user");
+          storeQuietly(text, "session_user");
         }
       : (text) => service.noteHeard(text),
     noteAssistantReply: memory
       ? (text) => {
           service.noteAssistantReply(text);
-          memory.addUtterance(text, "session_james");
+          storeQuietly(text, "session_james");
         }
       : (text) => service.noteAssistantReply(text),
     noteInfo: (message) => service.noteInfo(message),
@@ -374,7 +401,7 @@ export function registerAssistantIpc(
           ...(memory
             ? {
                 onAmbientUtterance: (u: AmbientUtterance): void => {
-                  memory.addUtterance(u.text, "ambient", Math.round(u.t1 * 1000));
+                  storeQuietly(u.text, "ambient", Math.round(u.t1 * 1000));
                 },
               }
             : {}),
