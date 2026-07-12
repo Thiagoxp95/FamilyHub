@@ -1,0 +1,65 @@
+# livekit-wakeword v2 training config for FamilyHub "Hey James".
+# Full production run (supersedes the June-7 first-pass hey_james.yaml):
+#   - 25k piper positives (vs 4k) + VoxCPM2 accented + macOS `say` positives merged in
+#   - conv_attention medium (vs small)
+#   - full ACAV100M negative features now present in data_dir/features
+# Trained on the M5 Pro/64GB dev box; deploys ONNX to the M1 Pro appliance.
+model_name: hey_james_v2
+target_phrases:
+  - "hey james"
+
+n_samples: 25000
+n_samples_val: 5000
+n_background_samples: 2000
+n_background_samples_val: 500
+tts_backend: piper_vits
+tts_batch_size: 100
+
+# Curated hard negatives ON TOP of the auto-generated phoneme-substitution
+# adversarials. Only genuine other-phrases here — never ASR-mishearing strings
+# of real wakes (e.g. "page ends"), which sit inside the owner's acoustic
+# cluster and would teach the model to reject the owner's own pronunciation.
+custom_negative_phrases:
+  - "hey jason"
+  - "jason"
+  - "james"
+  - "hey jane"
+  - "hey shane"
+  - "hey jamie"
+  - "hey games"
+  - "hey gems"
+  - "hey jams"
+  - "hey chains"
+  - "hey change"
+  - "hey dave"
+  - "a james"
+  - "okay james"
+
+# Prosody diversity (piper SLERP)
+noise_scales: [0.98]
+noise_scale_ws: [0.98]
+length_scales: [0.75, 1.0, 1.25]
+slerp_weights: [0.2, 0.35, 0.5, 0.65, 0.8]
+
+data_dir: /Users/tedyeng1/.familyhub/lkww-train/work/data
+output_dir: /Users/tedyeng1/.familyhub/lkww-train/work/output
+
+augmentation:
+  clip_duration: 2.0
+  batch_size: 16
+  rounds: 3
+  background_paths:
+    - /Users/tedyeng1/.familyhub/lkww-train/work/data/backgrounds
+  rir_paths:
+    - /Users/tedyeng1/.familyhub/lkww-train/work/data/rirs
+
+model:
+  model_type: conv_attention
+  model_size: medium
+
+steps: 50000
+target_fp_per_hour: 0.2
+
+# VoxCPM2 accented-positive generation is done as a SEPARATE pass with
+# hey_james_v2_voxcpm.yaml and merged into positive_train/positive_test
+# before `augment` (this keeps piper as the bulk backend).

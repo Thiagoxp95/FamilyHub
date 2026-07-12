@@ -3,19 +3,26 @@
 Always-on local **keyword spotter** for the "hey James" wake phrase. Once it
 fires the app opens Gemini Live, which does the actual transcription.
 
-## Engines (switchable)
+## Engine
 
-Selected via `--engine` or `FAMILYHUB_WAKE_ENGINE`:
+Single-stage [livekit-wakeword](https://github.com/livekit/livekit-wakeword)
+detector: a conv-attention classifier (`models/hey_james.onnx`, custom-trained
+for "hey james", committed) over the frozen Google speech-embedding front-end
+(mel + embedding models ship inside the pip wheel). The conv-attention head
+models phoneme ORDER, which is what separates "james" from the
+cames/games/jason confusable family — there is no second-stage ASR verifier
+chain (the old openWakeWord → Moonshine/Whisper/Vosk pipeline is gone; every
+lost wake died at its stage-1, and this replaces exactly that stage).
 
-- **`twostage` (default)** — Stage 1 is an [openWakeWord](https://github.com/dscripka/openWakeWord)
-  ONNX classifier (`models/hey_james.onnx`, custom-trained for "hey james", committed)
-  flagging candidates with high recall. On a candidate the sidecar buffers a short
-  post-trigger window so the full word lands, then Stage 2 free-decodes the ~2 s tail
-  with a sherpa-onnx **Moonshine tiny.en** recognizer and confirms only if it actually
-  transcribes "james" (or a curated alias). A false wake needs both stages wrong at once.
-  Threshold via `FAMILYHUB_WAKE_THRESHOLD` (default `0.5`, recall-first).
-- **`vosk`** — Vosk ASR constrained to a `["james","[unk]"]` grammar with a confidence
-  gate. ~40 MB model, no general-speech drift. Offline fallback: `FAMILYHUB_WAKE_ENGINE=vosk`.
+The sidecar streams incrementally: one embedding + one classifier pass per
+80 ms hop (~9 ms on M-class CPUs, ~1/10th the cost of livekit's stateless
+`predict()` per hop). Equivalence with the batch pipeline is locked by
+`test_streaming_engine.py`.
+
+Knobs (env): `FAMILYHUB_WAKE_MODEL`, `FAMILYHUB_WAKE_THRESHOLD` (recall-first
+operating point; re-derive with `wake_bench.py --tune`), `FAMILYHUB_WAKE_MIN_HITS`
+(consecutive hops ≥ threshold to fire, default 1), `FAMILYHUB_WAKE_COOLDOWN_MS`
+(refractory, default 2000), `FAMILYHUB_WAKE_PHRASE` (emitted text).
 
 ## Setup
 
@@ -24,13 +31,12 @@ cd sidecar
 PYTHON_BIN=python3.11 ./setup.sh
 ```
 
-Requires **Python ≥ 3.10**. Creates `sidecar/.venv`, installs the engines and
-downloads the Moonshine confirm model + Vosk fallback model into `models/`. The
-openWakeWord `hey_james.onnx` is committed (no download). The Electron main process
-auto-discovers `sidecar/.venv/bin/python` and `sidecar/wake_listener.py`.
-Overrides: `FAMILYHUB_SIDECAR_PYTHON`, `FAMILYHUB_SIDECAR_SCRIPT`,
-`FAMILYHUB_WAKE_ENGINE`, `FAMILYHUB_WAKE_THRESHOLD`, `FAMILYHUB_WAKE_MODEL`,
-`FAMILYHUB_MOONSHINE_MODEL`.
+Requires **Python ≥ 3.11**. Creates `sidecar/.venv` and installs
+livekit-wakeword + numpy + onnxruntime — no model downloads (the classifier is
+committed; feature models are in the wheel). The Electron main process
+auto-discovers `sidecar/.runtime/bin/python3` (packaged) then
+`sidecar/.venv/bin/python` (dev) and `sidecar/wake_listener.py`.
+Overrides: `FAMILYHUB_SIDECAR_PYTHON`, `FAMILYHUB_SIDECAR_SCRIPT`.
 
 ## Self-test (recommended)
 
@@ -41,21 +47,31 @@ Verifies wake detection end-to-end without the GUI/mic — synthesizes speech wi
 ./.venv/bin/python selftest.py
 ```
 
-Expected: `PASS — wakes on 'Hey James', quiet otherwise.` (exit 0). Test the Vosk
-engine with `FAMILYHUB_WAKE_ENGINE=vosk ./.venv/bin/python selftest.py`.
+Expected: `PASS — wakes on 'Hey James', quiet otherwise.` (exit 0).
 
-## Training the openWakeWord model
+## Benchmarks & tuning
 
-`models/hey_james.onnx` is produced off-device via openWakeWord's synthetic pipeline.
-See `training/README.md` for the reproducible recipe (Piper TTS positives + noise/
-negatives, ONNX export). For better real-room recall, fold in clips recorded on the
-appliance with `record_wake.py`.
-For the end-to-end owner personalization workflow (record → fold → retrain → gated
-promote → rollback) see `training/README.md` § *Personalizing on the owner's voice*.
+- `wake_bench.py` — recall + false-wakes/hour over the owner corpus
+  (`~/.familyhub/wake-corpus`, recorded with `record_corpus.py`); `--roc`
+  sweeps thresholds, `--tune --fp-budget 0.5` recommends
+  `FAMILYHUB_WAKE_THRESHOLD`. Its last stdout line is the JSON contract
+  `promote_model.sh` gates promotions on.
+- `diagnose_wake.py scores|pipeline` — score percentiles / recall / fire
+  latency over the held-out training test splits.
+- `test_streaming_engine.py`, `test_wake_bench.py`, `test_promote_model.py`,
+  `test_record_corpus.py` — standalone venv test scripts.
+
+## Training the model
+
+`models/hey_james.onnx` is produced off-device with the livekit-wakeword
+pipeline: piper VITS bulk positives + VoxCPM2 Brazilian-accented personas +
+macOS `say` voices, adversarial phoneme-substitution negatives + ACAV100M.
+See `training/README.md` for the full recipe, including folding real owner
+recordings (the strongest accent-recall lever) and the bench-gated promote.
 
 ## Protocol
 
 Newline-delimited over stdio: base64 int16 LINEAR16 @16 kHz frames in (or
 `{"cmd":"reset"}`), `{"type":"partial"|"final","text","words":[]}` JSON out. The
-first line is an empty `partial` ready-signal once the model loads; a transcript
-containing the wake phrase is emitted only when one is confidently detected.
+first line is an empty `partial` ready-signal once the model loads; a wake
+emits `{"type":"final","text":"hey james","words":[]}`.

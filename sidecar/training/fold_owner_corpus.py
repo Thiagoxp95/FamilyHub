@@ -1,60 +1,49 @@
 #!/usr/bin/env python3
-"""Fold the owner wake corpus into the openWakeWord training set, so the retrain
-learns the owner's actual voice/room. Idempotent (skips already-folded clips by
-destination filename).
+"""Fold the owner wake corpus into the livekit-wakeword training set, so the
+retrain learns the owner's actual voice/room — the single most-validated lever
+for accent recall (Home Assistant cut accent false-rejects 18%→5% with real
+recordings; synthetic-only pipelines plateau).
 
-openWakeWord's train.py reads training clips from
-``{output_dir}/{model_name}/{positive_train,negative_train}`` (see its lines
-648-651). With hey_james.yml (output_dir ./my_custom_model, model_name hey_james)
-those are ``my_custom_model/hey_james/positive_train`` and
-``.../negative_train`` — the dirs the trainer actually augments from. Positives →
-positive_train; negatives → negative_train.
+Owner clips from ~/.familyhub/wake-corpus/{positive,negative} (recorded with
+record_corpus.py, 16 kHz mono) are copied into
+~/.familyhub/lkww-train/work/output/<model>/{positive,negative}_train as
+clip_NNNNNN.wav continuations (the augment stage only accepts that naming),
+oversampled --dup times so a few dozen real clips carry weight against 25k
+synthetic ones. Run BEFORE `livekit-wakeword augment`.
 
-Run from sidecar/training with the TRAINING venv. Run this BEFORE run_full.sh:
-train.py:667 counts the clips already in positive_train and only tops up to
-n_samples, so seeding the owner clips first folds them into the training set
-(rather than being ignored). Re-running is safe — already-folded clips are
-skipped by destination filename.
-
-    sidecar/training/.venv/bin/python sidecar/training/fold_owner_corpus.py
+    python3 fold_owner_corpus.py [--model hey_james_v2] [--dup 25]
 """
+import argparse
 import os
-import shutil
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+
+from merge_staged_clips import merge_split  # noqa: E402
+
 CORPUS = os.path.expanduser("~/.familyhub/wake-corpus")
-# The dirs openWakeWord train.py actually reads training clips from:
-# {output_dir}/{model_name}/{positive_train,negative_train} (train.py:648-651).
-# For hey_james.yml that is my_custom_model/hey_james/{positive,negative}_train.
-# Adjust if hey_james.yml output_dir/model_name changes.
-POS_DST = os.path.join(HERE, "my_custom_model", "hey_james", "positive_train")
-NEG_DST = os.path.join(HERE, "my_custom_model", "hey_james", "negative_train")
-
-
-def fold(src_dir, dst_dir, prefix):
-    if not os.path.isdir(src_dir):
-        print(f"  (no {src_dir} — skipping)")
-        return 0
-    os.makedirs(dst_dir, exist_ok=True)
-    n = 0
-    for f in sorted(os.listdir(src_dir)):
-        if not f.endswith(".wav"):
-            continue
-        dst = os.path.join(dst_dir, f"{prefix}_{f}")
-        if not os.path.exists(dst):
-            shutil.copy2(os.path.join(src_dir, f), dst)
-            n += 1
-    return n
+OUTPUT = os.path.expanduser("~/.familyhub/lkww-train/work/output")
 
 
 def main():
-    pos = fold(os.path.join(CORPUS, "positive"), POS_DST, "owner")
-    neg = fold(os.path.join(CORPUS, "negative"), NEG_DST, "owner")
-    print(f"folded {pos} owner positives -> {POS_DST}")
-    print(f"folded {neg} owner negatives -> {NEG_DST}")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", default="hey_james_v2")
+    ap.add_argument("--dup", type=int, default=25,
+                    help="times each owner clip is folded in (oversampling weight)")
+    args = ap.parse_args()
+
+    dest = os.path.join(OUTPUT, args.model)
+    pos = neg = 0
+    for _ in range(max(1, args.dup)):
+        pos += merge_split(os.path.join(CORPUS, "positive"),
+                           os.path.join(dest, "positive_train"))
+        neg += merge_split(os.path.join(CORPUS, "negative"),
+                           os.path.join(dest, "negative_train"))
+    print(f"folded {pos} owner-positive and {neg} owner-negative copies into {dest}")
     if pos == 0:
-        print("WARNING: no owner positives found — record with record_corpus.py first", file=sys.stderr)
+        print("WARNING: no owner positives found — record with record_corpus.py first",
+              file=sys.stderr)
         return 1
     return 0
 

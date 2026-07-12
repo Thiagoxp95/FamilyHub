@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
-"""Recall + false-wake benchmark for the two-stage wake engine — the source of
-truth for tuning. Feeds the owner's recorded corpus through the REAL engine and
-reports recall, false-wakes/hour, and WHERE each miss died (stage-1 no-fire vs
-stage-2 veto). With no corpus present it self-smokes on macOS `say` clips.
+"""Recall + false-wake benchmark for the wake engine — the source of truth for
+tuning. Feeds the owner's recorded corpus through the REAL single-stage
+StreamingWakeEngine and reports recall, false-wakes/hour and per-miss peaks.
+With no corpus present it self-smokes on macOS `say` clips.
 
 Run with the sidecar venv:
     sidecar/.venv/bin/python sidecar/wake_bench.py              # uses ~/.familyhub/wake-corpus
     sidecar/.venv/bin/python sidecar/wake_bench.py --roc        # threshold sweep
+    sidecar/.venv/bin/python sidecar/wake_bench.py --tune --fp-budget 0.5
 Corpus layout: ~/.familyhub/wake-corpus/{positive,negative}/*.wav (16 kHz mono).
+
+The engine is single-stage (score >= threshold fires), so --roc/--tune don't
+re-feed audio per threshold: each clip's peak score is recorded once with an
+unreachable threshold, then any threshold's fire decision is peak >= t. The
+default report DOES drive the real engine at the real threshold end-to-end.
+
+The LAST stdout line is always a single JSON object — promote_model.sh parses
+it (keys: recall, positives, positives_fired, false_wakes, negative_seconds,
+false_wakes_per_hour, misses). Human-readable detail goes to stderr.
 """
 import argparse
 import json
@@ -54,26 +64,12 @@ def say_pcm(text, voice=None):
                 os.unlink(p)
 
 
-def _engine_threshold(engine):
-    """Stage-1 threshold for whichever engine shape we were given."""
-    stage1 = getattr(engine, "stage1", None)
-    if stage1 is not None and hasattr(stage1, "threshold"):
-        return float(stage1.threshold)
-    return float(getattr(engine, "threshold", 0.32))
-
-
 def classify_clip(engine, audio_int16):
-    """Feed one clip; return (reason, peak_score, heard).
-    reason ∈ {"fired","stage2_veto","stage1_nofire"}.
+    """Feed one clip through the engine; return (fired, peak_score).
 
-    For the real TwoStageEngine, a non-fire is a stage-2 veto iff the engine's
-    cumulative `rejected` counter advanced during THIS clip. This is the robust
-    signal: the engine zeroes stage1._peak on a fire (see OpenWakeWordEngine.feed),
-    so peak alone cannot distinguish a vetoed fire from a never-fired clip, and
-    `_last_heard` persists across clips. Fakes without a `rejected` counter fall
-    back to heard/peak."""
+    The clip is padded with real-ish leading context and trailing silence so
+    the full phrase transits the 2 s embedding window."""
     engine.reset()
-    rejected_before = getattr(engine, "rejected", None)
     pre = np.zeros(SR // 2, dtype=np.int16)
     post = np.zeros(2 * SR, dtype=np.int16)
     stream = np.concatenate([pre, audio_int16, post])
@@ -85,43 +81,60 @@ def classify_clip(engine, audio_int16):
         if engine.feed(chunk.tobytes()):
             fired = True
             break
-    peak = float(
-        engine.observed_peak() if hasattr(engine, "observed_peak")
-        else getattr(getattr(engine, "stage1", None), "_peak", 0.0)
-    )
-    heard = getattr(engine, "_last_heard", "") or ""
-    if fired:
-        return "fired", peak, heard
-    if rejected_before is not None:  # real engine: trust the veto counter
-        if engine.rejected > rejected_before:
-            return "stage2_veto", peak, heard
-        return "stage1_nofire", peak, ""
-    # fake/other engine without a reject counter: peak/heard fallback
-    if heard or peak >= _engine_threshold(engine):
-        return "stage2_veto", peak, heard
-    return "stage1_nofire", peak, heard
+    return fired, float(getattr(engine, "observed_peak", 0.0))
+
+
+def score_clips(clips, make_engine):
+    """Record each clip's peak score with a never-firing engine.
+    Returns [(name, peak, seconds)]."""
+    engine = make_engine(threshold=999.0)
+    rows = []
+    for name, audio in clips:
+        _, peak = classify_clip(engine, audio)
+        rows.append((name, peak, len(audio) / SR))
+    return rows
+
+
+def report_from_peaks(pos_rows, neg_rows, threshold):
+    fired = sum(1 for _, peak, _ in pos_rows if peak >= threshold)
+    misses = [
+        {"name": name, "reason": "nofire", "peak": round(peak, 3)}
+        for name, peak, _ in pos_rows
+        if peak < threshold
+    ]
+    false_wakes = sum(1 for _, peak, _ in neg_rows if peak >= threshold)
+    neg_seconds = sum(secs + 2.5 for _, _, secs in neg_rows)  # incl. pad
+    fwph = (false_wakes / neg_seconds * 3600.0) if neg_seconds > 0 else 0.0
+    return {
+        "recall": (fired / len(pos_rows)) if pos_rows else 0.0,
+        "positives": len(pos_rows),
+        "positives_fired": fired,
+        "false_wakes": false_wakes,
+        "negative_seconds": round(neg_seconds, 2),
+        "false_wakes_per_hour": round(fwph, 2),
+        "misses": misses,
+    }
 
 
 def bench(positive_clips, negative_clips, make_engine):
-    """positive_clips/negative_clips: list of (name, int16 audio).
-    make_engine: zero-arg factory returning a fresh engine.
-    Returns the report dict (see module/plan docstring)."""
+    """End-to-end bench driving the real engine at its real threshold.
+    Returns the report dict; contract consumed by promote_model.sh."""
     engine = make_engine()
     fired = 0
     misses = []
     for name, audio in positive_clips:
-        reason, peak, heard = classify_clip(engine, audio)
-        if reason == "fired":
+        did_fire, peak = classify_clip(engine, audio)
+        if did_fire:
             fired += 1
         else:
-            misses.append({"name": name, "reason": reason, "peak": round(peak, 3), "heard": heard})
+            misses.append({"name": name, "reason": "nofire", "peak": round(peak, 3)})
 
     false_wakes = 0
     neg_samples = 0
     for name, audio in negative_clips:
-        neg_samples += len(audio)
-        reason, peak, heard = classify_clip(engine, audio)
-        if reason == "fired":
+        neg_samples += len(audio) + SR // 2 + 2 * SR
+        did_fire, _ = classify_clip(engine, audio)
+        if did_fire:
             false_wakes += 1
     neg_seconds = neg_samples / SR
     fwph = (false_wakes / neg_seconds * 3600.0) if neg_seconds > 0 else 0.0
@@ -132,7 +145,7 @@ def bench(positive_clips, negative_clips, make_engine):
         "positives_fired": fired,
         "false_wakes": false_wakes,
         "negative_seconds": round(neg_seconds, 2),
-        "false_wakes_per_hour": round(fwph, 1),
+        "false_wakes_per_hour": round(fwph, 2),
         "misses": misses,
     }
 
@@ -140,21 +153,17 @@ def bench(positive_clips, negative_clips, make_engine):
 def real_engine_factory(threshold=None):
     import wake_listener as wl
 
-    thr = float(os.environ.get("FAMILYHUB_WAKE_THRESHOLD", "0.32")) if threshold is None else threshold
-    model = os.path.join(HERE, "models", "hey_james.onnx")
+    model = os.environ.get(
+        "FAMILYHUB_WAKE_MODEL", os.path.join(HERE, "models", "hey_james.onnx")
+    )
 
-    def make():
-        verifiers = [wl.MoonshineConfirmer(os.path.join(HERE, "models", "sherpa-onnx-moonshine-tiny-en-int8"))]
-        whisper = os.path.join(HERE, "models", "sherpa-onnx-whisper-tiny.en")
-        if os.path.isdir(whisper):
-            verifiers.append(wl.WhisperConfirmer(whisper))
-        vosk = os.path.join(HERE, "models", "vosk-model-small-en-us-0.15")
-        if os.path.isdir(vosk):
-            verifiers.append(wl.VoskFreeConfirmer(vosk))
-        eng = wl.TwoStageEngine(model, thr, wl.ChainConfirmer(verifiers), ["james"])
-        # Expose a stable peak hook for classify_clip (real engine tracks stage1._peak).
-        eng.observed_peak = lambda e=eng: float(getattr(e.stage1, "_peak", 0.0))
-        return eng
+    def make(threshold=threshold):
+        thr = (
+            float(os.environ.get("FAMILYHUB_WAKE_THRESHOLD", wl.DEFAULT_THRESHOLD))
+            if threshold is None
+            else threshold
+        )
+        return wl.StreamingWakeEngine(model, thr)
 
     return make
 
@@ -164,15 +173,32 @@ def load_corpus():
         d = os.path.join(CORPUS, sub)
         if not os.path.isdir(d):
             return []
-        return [(f, load_wav(os.path.join(d, f))) for f in sorted(os.listdir(d)) if f.endswith(".wav")]
+        return [
+            (f, load_wav(os.path.join(d, f)))
+            for f in sorted(os.listdir(d))
+            if f.endswith(".wav")
+        ]
+
     return load_dir("positive"), load_dir("negative")
 
 
 def smoke_corpus():
-    """Synthetic stand-in corpus so the harness runs end-to-end with no recordings."""
-    pos = [("tts_default", say_pcm("hey James")), ("tts_daniel", say_pcm("hey James", "Daniel"))]
-    neg = [("tts_came", say_pcm("he came home")), ("tts_weather", say_pcm("what is the weather today"))]
+    """Synthetic stand-in corpus so the harness runs end-to-end with no
+    recordings. Luciana (pt-BR) covers the accented-positive class."""
+    pos = [
+        ("tts_default", say_pcm("hey James")),
+        ("tts_daniel", say_pcm("hey James", "Daniel")),
+        ("tts_luciana", say_pcm("hey James", "Luciana")),
+    ]
+    neg = [
+        ("tts_came", say_pcm("he came home")),
+        ("tts_jason", say_pcm("hey Jason", "Daniel")),
+        ("tts_weather", say_pcm("what is the weather today")),
+    ]
     return pos, neg
+
+
+THRESHOLDS = [round(t, 2) for t in np.arange(0.05, 0.96, 0.05)]
 
 
 def main():
@@ -180,8 +206,7 @@ def main():
     ap.add_argument("--roc", action="store_true", help="sweep threshold and print recall/FP curve")
     ap.add_argument("--threshold", type=float, default=None)
     ap.add_argument("--tune", action="store_true",
-                    help="recommend a --threshold for the FP budget; sweeps "
-                    "--threshold ONLY (does not tune bypass or or-score)")
+                    help="recommend FAMILYHUB_WAKE_THRESHOLD for the FP budget")
     ap.add_argument("--fp-budget", type=float, default=0.5,
                     help="max false-wakes/hour to allow when tuning (default 0.5 ≈ a few/day)")
     args = ap.parse_args()
@@ -191,10 +216,25 @@ def main():
         print("(no owner corpus — running TTS smoke set)", file=sys.stderr)
         pos, neg = smoke_corpus()
 
-    if args.tune:
+    if args.tune or args.roc:
+        factory = real_engine_factory()
+        pos_rows = score_clips(pos, factory)
+        neg_rows = score_clips(neg, factory)
+
+        if args.roc:
+            curve = []
+            for thr in THRESHOLDS:
+                r = report_from_peaks(pos_rows, neg_rows, thr)
+                curve.append({"threshold": thr, "recall": r["recall"],
+                              "false_wakes_per_hour": r["false_wakes_per_hour"]})
+                print(f"thr={thr:.2f} recall={r['recall']:.2f} fw/h={r['false_wakes_per_hour']}",
+                      file=sys.stderr)
+            print(json.dumps(curve))
+            return 0
+
         best = None
-        for thr in [0.15, 0.20, 0.25, 0.30, 0.35]:
-            r = bench(pos, neg, real_engine_factory(thr))
+        for thr in THRESHOLDS:
+            r = report_from_peaks(pos_rows, neg_rows, thr)
             if r["false_wakes_per_hour"] <= args.fp_budget:
                 if best is None or r["recall"] > best["recall"]:
                     best = {"threshold": thr, "recall": r["recall"],
@@ -205,17 +245,9 @@ def main():
             print(json.dumps({"recommendation": None}))
             return 0
         print(f"RECOMMEND FAMILYHUB_WAKE_THRESHOLD={best['threshold']} "
-              f"(recall={best['recall']:.2f}, fw/h={best['false_wakes_per_hour']})", file=sys.stderr)
+              f"(recall={best['recall']:.2f}, fw/h={best['false_wakes_per_hour']})",
+              file=sys.stderr)
         print(json.dumps({"recommendation": best}))
-        return 0
-
-    if args.roc:
-        curve = []
-        for thr in [0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50]:
-            r = bench(pos, neg, real_engine_factory(thr))
-            curve.append({"threshold": thr, "recall": r["recall"], "false_wakes_per_hour": r["false_wakes_per_hour"]})
-            print(f"thr={thr:.2f} recall={r['recall']:.2f} fw/h={r['false_wakes_per_hour']}", file=sys.stderr)
-        print(json.dumps(curve))
         return 0
 
     report = bench(pos, neg, real_engine_factory(args.threshold))
@@ -223,7 +255,7 @@ def main():
           f"false_wakes={report['false_wakes']} over {report['negative_seconds']}s "
           f"= {report['false_wakes_per_hour']}/h", file=sys.stderr)
     for m in report["misses"]:
-        print(f"  MISS {m['name']}: {m['reason']} peak={m['peak']} {m['heard']}", file=sys.stderr)
+        print(f"  MISS {m['name']}: {m['reason']} peak={m['peak']}", file=sys.stderr)
     print(json.dumps(report))
     return 0
 

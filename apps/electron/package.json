@@ -64,7 +64,9 @@
           "!**/.git",
           "!**/.git/**",
           "!**/__pycache__/**",
-          "!**/*.pyc"
+          "!**/*.pyc",
+          "!models/sherpa-onnx-*/**",
+          "!models/vosk-model-*/**"
         ]
       }
     ],

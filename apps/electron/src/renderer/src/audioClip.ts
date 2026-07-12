@@ -48,11 +48,18 @@ const CAPTURE_RATE = 16000;
 // Capture a fixed ~`seconds` window of 16 kHz mono int16 from the mic, then tear
 // the graph down. Mirrors App.tsx's capture setup but accumulates a window
 // instead of streaming. The accumulation math is windowSampleCount/accumulateWindow.
+// With no explicit deviceId, records from the same auto-pinned external USB mic
+// the wake loop captures from — enrollment clips must match inference audio.
 export async function recordClip(opts?: { seconds?: number; deviceId?: string }): Promise<Int16Array> {
   const seconds = opts?.seconds ?? 2;
   const needed = windowSampleCount(seconds, CAPTURE_RATE);
   const audio: MediaTrackConstraints = { channelCount: 1, echoCancellation: true, autoGainControl: true, noiseSuppression: false };
-  if (opts?.deviceId) audio.deviceId = { exact: opts.deviceId };
+  let deviceId = opts?.deviceId;
+  if (!deviceId && navigator.mediaDevices?.enumerateDevices) {
+    const { pickPreferredMicId } = await import("./micSelection");
+    deviceId = pickPreferredMicId(await navigator.mediaDevices.enumerateDevices(), "");
+  }
+  if (deviceId) audio.deviceId = { exact: deviceId };
   // Hoisted so the finally can always tear both down, even if the AudioContext
   // ctor throws right after getUserMedia opened the mic (which otherwise leaks
   // an open input stream — the leak App.tsx's capture loop was hardened against).
