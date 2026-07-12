@@ -115,6 +115,90 @@ describe("EmbedWorker", () => {
     expect(() => worker.stop()).not.toThrow();
   });
 
+  it("tick resolves and counts only successful embeds when setEmbedding throws", async () => {
+    if (!store.vectorSearchAvailable) return;
+    store.addUtterance("first", "ambient", 1000);
+    store.addUtterance("second", "ambient", 2000);
+    const ollama = stubOllama();
+    let calls = 0;
+    vi.spyOn(store, "setEmbedding").mockImplementation(() => {
+      calls += 1;
+      if (calls === 1) throw new Error("SQLITE_BUSY");
+    });
+    const worker = new EmbedWorker({ store, ollama });
+
+    await expect(worker.tick()).resolves.toBe(1);
+  });
+
+  it("tick resolves 0 when pendingEmbeddings throws", async () => {
+    const ollama = stubOllama();
+    vi.spyOn(store, "pendingEmbeddings").mockImplementation(() => {
+      throw new Error("SQLITE_BUSY");
+    });
+    const worker = new EmbedWorker({ store, ollama });
+
+    await expect(worker.tick()).resolves.toBe(0);
+    expect(ollama.embed).not.toHaveBeenCalled();
+  });
+
+  it("skips overlapping ticks while an embed is still in flight", async () => {
+    if (!store.vectorSearchAvailable) return;
+    store.addUtterance("slow one", "ambient");
+    let resolveEmbed!: (v: Float32Array | null) => void;
+    const ollama = stubOllama({
+      embed: vi.fn(
+        () =>
+          new Promise<Float32Array | null>((resolve) => {
+            resolveEmbed = resolve;
+          }),
+      ),
+    });
+    const pendingSpy = vi.spyOn(store, "pendingEmbeddings");
+    const worker = new EmbedWorker({ store, ollama });
+
+    const first = worker.tick();
+    const second = worker.tick();
+
+    await expect(second).resolves.toBe(0);
+    expect(pendingSpy).toHaveBeenCalledTimes(1);
+
+    resolveEmbed(unitVector());
+    await expect(first).resolves.toBe(1);
+
+    // once the in-flight tick finishes, the next tick runs normally
+    await worker.tick();
+    expect(pendingSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("interval firings while a tick is in flight do not re-fetch pending rows", async () => {
+    if (!store.vectorSearchAvailable) return;
+    vi.useFakeTimers();
+    store.addUtterance("slow one", "ambient");
+    let resolveEmbed!: (v: Float32Array | null) => void;
+    const ollama = stubOllama({
+      embed: vi.fn(
+        () =>
+          new Promise<Float32Array | null>((resolve) => {
+            resolveEmbed = resolve;
+          }),
+      ),
+    });
+    const pendingSpy = vi.spyOn(store, "pendingEmbeddings");
+    const worker = new EmbedWorker({ store, ollama, intervalMs: 1000 });
+
+    worker.start();
+    await vi.advanceTimersByTimeAsync(1000); // first tick starts, embed hangs
+    await vi.advanceTimersByTimeAsync(3000); // three more firings while in flight
+
+    expect(pendingSpy).toHaveBeenCalledTimes(1);
+
+    resolveEmbed(unitVector());
+    await vi.advanceTimersByTimeAsync(1000); // next firing after completion runs
+    expect(pendingSpy).toHaveBeenCalledTimes(2);
+
+    worker.stop();
+  });
+
   it("defaults intervalMs to 15000", () => {
     vi.useFakeTimers();
     const ollama = stubOllama();
