@@ -33,6 +33,7 @@ import { AssistantService } from "./service";
 import { MemoryStore, type SearchOptions, type UtteranceSource } from "../ambient/memoryStore";
 import { createOllamaClient, type OllamaClient } from "../ambient/ollama";
 import { EmbedWorker } from "../ambient/embedWorker";
+import { scheduleDigest } from "../ambient/factsDigest";
 import type { AssistantSnapshot } from "./types";
 import type { AgentEvent, AgentReminder } from "./calendarTools";
 import type { DashboardController, DashboardPanel } from "../dashboard/ipc";
@@ -86,6 +87,14 @@ export function registerAssistantIpc(
   const memoryBundle = buildMemory();
   const memory = memoryBundle?.store ?? null;
   const ollama = memoryBundle?.ollama ?? null;
+
+  // Nightly facts digest: distills the day's raw utterances into the
+  // curated `facts` memory layer. No shutdown hook exists yet in this
+  // module to cancel it on quit — the interval is process-lifetime, so the
+  // cancel function is intentionally unused here (not a leak: it dies with
+  // the process).
+  const cancelDigestSchedule = memoryBundle ? scheduleDigest(memoryBundle.store, memoryBundle.ollama) : null;
+  void cancelDigestSchedule;
 
   // Runtime store writes (synchronous node:sqlite) can throw after a healthy
   // startup — disk full, WAL lock, etc. These run inside live-session/sidecar
