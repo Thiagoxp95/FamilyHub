@@ -10,6 +10,7 @@ import {
   calendarToolNames,
   computerToolName,
   dashboardToolNames,
+  memoryToolNames,
   noteToolNames,
   updaterToolNames,
   weatherToolName,
@@ -29,8 +30,8 @@ import {
   type LocalTranscriber,
 } from "./localTranscriber";
 import { AssistantService } from "./service";
-import { MemoryStore, type UtteranceSource } from "../ambient/memoryStore";
-import { createOllamaClient } from "../ambient/ollama";
+import { MemoryStore, type SearchOptions, type UtteranceSource } from "../ambient/memoryStore";
+import { createOllamaClient, type OllamaClient } from "../ambient/ollama";
 import { EmbedWorker } from "../ambient/embedWorker";
 import type { AssistantSnapshot } from "./types";
 import type { AgentEvent, AgentReminder } from "./calendarTools";
@@ -64,7 +65,7 @@ export function registerAssistantIpc(
 
   // Never blocks startup: a failed store (bad path, disk full, sqlite-vec
   // load failure, etc.) just disables ambient wiring for this run.
-  function buildMemory(): MemoryStore | null {
+  function buildMemory(): { store: MemoryStore; ollama: OllamaClient } | null {
     if (!ambientEnabled) {
       return null;
     }
@@ -73,7 +74,7 @@ export function registerAssistantIpc(
       const store = new MemoryStore(join(homedir(), ".familyhub", "memory.sqlite"));
       const ollama = createOllamaClient();
       new EmbedWorker({ store, ollama }).start();
-      return store;
+      return { store, ollama };
     } catch (error) {
       service.noteInfo(
         `Ambient memory unavailable: ${error instanceof Error ? error.message : String(error)}`,
@@ -82,7 +83,9 @@ export function registerAssistantIpc(
     }
   }
 
-  const memory = buildMemory();
+  const memoryBundle = buildMemory();
+  const memory = memoryBundle?.store ?? null;
+  const ollama = memoryBundle?.ollama ?? null;
 
   // Runtime store writes (synchronous node:sqlite) can throw after a healthy
   // startup — disk full, WAL lock, etc. These run inside live-session/sidecar
@@ -367,6 +370,31 @@ export function registerAssistantIpc(
         return result.ok
           ? { ok: true, output: result.output ?? "Done." }
           : { ok: false, error: result.error ?? "Computer task failed." };
+      }
+      case memoryToolNames.search: {
+        if (!memory) return { ok: false, error: "Memory is not enabled." };
+        const query = str(args.query);
+        const daysBack = typeof args.daysBack === "number" ? args.daysBack : undefined;
+        const vector = ollama ? await ollama.embed(query) : null;
+        const opts: SearchOptions = { topK: 5, layer: "both" };
+        if (daysBack !== undefined) {
+          opts.sinceTs = Date.now() - daysBack * 86_400_000;
+        }
+        const hits = memory.search(vector, query, opts);
+        return {
+          ok: true,
+          results: hits.map((hit) => ({
+            when: new Date(hit.ts).toISOString(),
+            layer: hit.layer,
+            source: hit.source,
+            text: hit.text,
+          })),
+        };
+      }
+      case memoryToolNames.forget: {
+        if (!memory) return { ok: false, error: "Memory is not enabled." };
+        const result = memory.forget(str(args.query));
+        return { ok: true, deleted: result.deleted, texts: result.texts.slice(0, 5) };
       }
       case updaterToolNames.checkForUpdates:
         return callUpdater(updater, (controller) => controller.checkNow());

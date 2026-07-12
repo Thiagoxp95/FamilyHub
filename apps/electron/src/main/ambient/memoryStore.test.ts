@@ -127,6 +127,29 @@ describe("MemoryStore", () => {
     expect(hits[0]!.layer).toBe("fact");
   });
 
+  it("LIKE search treats a bare % in the query as a literal character, not 'match everything'", () => {
+    store.addUtterance("100% sure", "ambient");
+    store.addUtterance("other text", "ambient");
+    const hits = store.search(null, "%");
+    expect(hits.map((h) => h.text)).toEqual(["100% sure"]);
+  });
+
+  it("LIKE search treats _ in the query as a literal underscore, not 'match any char'", () => {
+    store.addUtterance("cat is here", "ambient");
+    store.addUtterance("c_t literal here", "ambient");
+    const hits = store.search(null, "c_t");
+    expect(hits.map((h) => h.text)).toEqual(["c_t literal here"]);
+  });
+
+  it("forget treats a bare % in the query as a literal character, not 'delete everything'", () => {
+    store.addUtterance("100% sure", "ambient");
+    store.addUtterance("other text", "ambient");
+    const result = store.forget("%");
+    expect(result.deleted).toBe(1);
+    expect(result.texts).toEqual(["100% sure"]);
+    expect(store.search(null, "other").map((h) => h.text)).toEqual(["other text"]);
+  });
+
   it("forget deletes matching rows and reports them", () => {
     store.addUtterance("secret thing happened", "ambient");
     const result = store.forget("secret thing");

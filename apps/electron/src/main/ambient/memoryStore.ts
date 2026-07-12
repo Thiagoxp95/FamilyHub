@@ -35,6 +35,17 @@ function toVecBytes(vector: Float32Array): Uint8Array {
   return new Uint8Array(vector.buffer, vector.byteOffset, vector.byteLength);
 }
 
+// Untrusted text (LLM tool-call args, transcribed speech) is interpolated into
+// LIKE patterns below. `%` and `_` are LIKE wildcards and `\` is the escape
+// character we choose, so all three must be escaped before wrapping the value
+// in `%...%` — otherwise a query containing e.g. a bare "%" degrades into
+// "match everything" (search: leaks unrelated memories; forget: deletes rows
+// that were never asked for). Every LIKE call site must pair this with
+// `ESCAPE '\'` in the SQL.
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
 // node:sqlite returns INTEGER columns as bigint only when the value exceeds
 // Number.MAX_SAFE_INTEGER; ids/timestamps here never do, but some driver
 // paths (e.g. explicit bigint bind params) round-trip as bigint regardless.
@@ -216,8 +227,8 @@ export class MemoryStore {
       }));
     }
 
-    const params: Array<string | number> = [`%${queryText}%`];
-    let sql = "SELECT id, ts, text, source FROM utterances WHERE text LIKE ?";
+    const params: Array<string | number> = [`%${escapeLike(queryText)}%`];
+    let sql = "SELECT id, ts, text, source FROM utterances WHERE text LIKE ? ESCAPE '\\'";
     if (sinceTs !== undefined) {
       sql += " AND ts >= ?";
       params.push(sinceTs);
@@ -268,9 +279,9 @@ export class MemoryStore {
       }));
     }
 
-    const params: Array<string | number> = [now, `%${queryText}%`];
+    const params: Array<string | number> = [now, `%${escapeLike(queryText)}%`];
     let sql = `SELECT id, ts, text FROM facts
-      WHERE (expires_at IS NULL OR expires_at >= ?) AND text LIKE ?`;
+      WHERE (expires_at IS NULL OR expires_at >= ?) AND text LIKE ? ESCAPE '\\'`;
     if (sinceTs !== undefined) {
       sql += " AND ts >= ?";
       params.push(sinceTs);
@@ -308,11 +319,11 @@ export class MemoryStore {
   }
 
   forget(matchText: string): { deleted: number; texts: string[] } {
-    const like = `%${matchText}%`;
+    const like = `%${escapeLike(matchText)}%`;
     const texts: string[] = [];
 
     const utteranceRows = this.db
-      .prepare("SELECT id, text FROM utterances WHERE text LIKE ?")
+      .prepare("SELECT id, text FROM utterances WHERE text LIKE ? ESCAPE '\\'")
       .all(like) as Array<{ id: number | bigint; text: string }>;
     for (const row of utteranceRows) {
       texts.push(row.text);
@@ -324,7 +335,7 @@ export class MemoryStore {
     }
 
     const factRows = this.db
-      .prepare("SELECT id, text FROM facts WHERE text LIKE ?")
+      .prepare("SELECT id, text FROM facts WHERE text LIKE ? ESCAPE '\\'")
       .all(like) as Array<{ id: number | bigint; text: string }>;
     for (const row of factRows) {
       texts.push(row.text);
