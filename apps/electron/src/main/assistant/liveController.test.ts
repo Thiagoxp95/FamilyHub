@@ -6,6 +6,7 @@ import {
 } from "./liveController";
 import type { LiveSessionHandlers } from "./liveSession";
 import type {
+  AmbientUtterance,
   LocalTranscriber,
   LocalTranscriberHandlers,
 } from "./localTranscriber";
@@ -31,6 +32,10 @@ class FakeTranscriber implements LocalTranscriber {
 
   emit(text: string): void {
     this.handlers?.onTranscript({ type: "partial", text, words: [] });
+  }
+
+  emitUtterance(u: AmbientUtterance): void {
+    this.handlers?.onUtterance?.(u);
   }
 }
 
@@ -491,5 +496,51 @@ describe("LiveController", () => {
     await vi.waitFor(() =>
       expect(resetDashboardFocus).toHaveBeenCalledTimes(1),
     );
+  });
+
+  it("forwards ambient utterances to onAmbientUtterance when provided", async () => {
+    const transcriber = new FakeTranscriber();
+    const sink = createSink();
+    const onAmbientUtterance = vi.fn();
+    const controller = new LiveController({
+      createTranscriber: () => transcriber,
+      createSession: () => new FakeSession(),
+      sink,
+      onAmbientUtterance,
+    });
+    await controller.start();
+
+    const utterance: AmbientUtterance = {
+      type: "utterance",
+      text: "the dog needs a walk",
+      t0: 100,
+      t1: 101.5,
+      engine: "moonshine",
+    };
+    transcriber.emitUtterance(utterance);
+
+    expect(onAmbientUtterance).toHaveBeenCalledTimes(1);
+    expect(onAmbientUtterance).toHaveBeenCalledWith(utterance);
+  });
+
+  it("does not crash on an ambient utterance when onAmbientUtterance is not provided", async () => {
+    const transcriber = new FakeTranscriber();
+    const sink = createSink();
+    const controller = new LiveController({
+      createTranscriber: () => transcriber,
+      createSession: () => new FakeSession(),
+      sink,
+    });
+    await controller.start();
+
+    expect(() =>
+      transcriber.emitUtterance({
+        type: "utterance",
+        text: "no listener attached",
+        t0: 0,
+        t1: 1,
+        engine: "moonshine",
+      }),
+    ).not.toThrow();
   });
 });

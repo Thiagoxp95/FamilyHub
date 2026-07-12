@@ -1,4 +1,5 @@
 import { app, ipcMain, type WebContents } from "electron";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { EnrollmentStore } from "./enrollmentStore";
 import { decodePcm16 } from "./enrollmentIpc";
@@ -24,9 +25,13 @@ import {
   WakeWordSidecar,
   resolveSidecarPython,
   resolveSidecarScript,
+  type AmbientUtterance,
   type LocalTranscriber,
 } from "./localTranscriber";
 import { AssistantService } from "./service";
+import { MemoryStore } from "../ambient/memoryStore";
+import { createOllamaClient } from "../ambient/ollama";
+import { EmbedWorker } from "../ambient/embedWorker";
 import type { AssistantSnapshot } from "./types";
 import type { AgentEvent, AgentReminder } from "./calendarTools";
 import type { DashboardController, DashboardPanel } from "../dashboard/ipc";
@@ -51,6 +56,34 @@ export function registerAssistantIpc(
   const sidecarPython = resolveSidecarPython();
   const service = new AssistantService();
 
+  // Ambient capture (silent transcription of everything heard, plus session
+  // transcripts) into the local memory DB. Opt-out via FAMILYHUB_AMBIENT.
+  const ambientEnabled = !["0", "off", "false", "no"].includes(
+    (process.env.FAMILYHUB_AMBIENT ?? "1").trim().toLowerCase(),
+  );
+
+  // Never blocks startup: a failed store (bad path, disk full, sqlite-vec
+  // load failure, etc.) just disables ambient wiring for this run.
+  function buildMemory(): MemoryStore | null {
+    if (!ambientEnabled) {
+      return null;
+    }
+
+    try {
+      const store = new MemoryStore(join(homedir(), ".familyhub", "memory.sqlite"));
+      const ollama = createOllamaClient();
+      new EmbedWorker({ store, ollama }).start();
+      return store;
+    } catch (error) {
+      service.noteInfo(
+        `Ambient memory unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+  }
+
+  const memory = buildMemory();
+
   // The single renderer we stream live state to. Set when the renderer starts
   // listening; the controller pushes mode/transcript/audio events at it.
   let liveSender: WebContents | null = null;
@@ -68,8 +101,18 @@ export function registerAssistantIpc(
         liveSender.send(liveAudioChannel, chunk);
       }
     },
-    noteHeard: (text) => service.noteHeard(text),
-    noteAssistantReply: (text) => service.noteAssistantReply(text),
+    noteHeard: memory
+      ? (text) => {
+          service.noteHeard(text);
+          memory.addUtterance(text, "session_user");
+        }
+      : (text) => service.noteHeard(text),
+    noteAssistantReply: memory
+      ? (text) => {
+          service.noteAssistantReply(text);
+          memory.addUtterance(text, "session_james");
+        }
+      : (text) => service.noteAssistantReply(text),
     noteInfo: (message) => service.noteInfo(message),
     emitSnapshot: () => {
       if (liveSender) {
@@ -328,6 +371,13 @@ export function registerAssistantIpc(
           runTool,
           resetDashboardFocus: () => dashboard?.focusPanel(null),
           sink,
+          ...(memory
+            ? {
+                onAmbientUtterance: (u: AmbientUtterance): void => {
+                  memory.addUtterance(u.text, "ambient", Math.round(u.t1 * 1000));
+                },
+              }
+            : {}),
         })
       : null;
 

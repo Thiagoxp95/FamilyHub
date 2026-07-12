@@ -18,7 +18,7 @@ import {
   type LiveEvent,
   type LiveSessionHandlers,
 } from "./liveSession";
-import type { LocalTranscriber } from "./localTranscriber";
+import type { AmbientUtterance, LocalTranscriber } from "./localTranscriber";
 
 // The "zoom a quadrant to full screen" tool calls. While a computer-control task
 // owns the screen, Gemini sometimes reflexively fires one of these (usually
@@ -85,6 +85,10 @@ export interface LiveControllerOptions {
   wakePhrases?: string[];
   config?: ListenerConfig;
   idleTimeoutMs?: number;
+  // Forwarded from the transcriber's onUtterance handler — every sidecar-
+  // detected utterance (idle-time ambient speech), not just wake-triggered
+  // sessions. Feeds the ambient memory pipeline in ipc.ts.
+  onAmbientUtterance?: (utterance: AmbientUtterance) => void;
 }
 
 const defaultWakePhrases = ["hey james"];
@@ -134,6 +138,9 @@ export class LiveController {
   private readonly wakePhrases: string[];
   private readonly config: ListenerConfig;
   private readonly idleTimeoutMs: number;
+  private readonly onAmbientUtterance:
+    | ((utterance: AmbientUtterance) => void)
+    | null;
 
   private transcriber: LocalTranscriber | null = null;
   private session: LiveSessionLike | null = null;
@@ -161,6 +168,7 @@ export class LiveController {
     this.wakePhrases = options.wakePhrases ?? defaultWakePhrases;
     this.config = options.config ?? defaultListenerConfig;
     this.idleTimeoutMs = options.idleTimeoutMs ?? defaultIdleTimeoutMs;
+    this.onAmbientUtterance = options.onAmbientUtterance ?? null;
   }
 
   async start(): Promise<void> {
@@ -182,6 +190,7 @@ export class LiveController {
 
         this.handleTranscript(message.text);
       },
+      onUtterance: (utterance) => this.onAmbientUtterance?.(utterance),
       onError: (message) => {
         if (this.listenerReady) {
           this.sink.noteInfo(`Listener error: ${message}`);
