@@ -121,6 +121,29 @@ mic frames (16 kHz) ──┬──> openWakeWord + verifier chain      (unchang
 
 Each phase is independently shippable and releasable.
 
+## Implementation notes (post-hoc, Task 14)
+
+Recorded where the shipped code diverged from this spec's wording:
+
+- **SQLite binding:** `memoryStore.ts` uses Node's built-in `node:sqlite`
+  (`DatabaseSync`) + `sqlite-vec`, not `better-sqlite3` as written above under
+  "Architecture" and Component 3 — `node:sqlite` avoids an extra native
+  dependency and was available in the target Node/Electron version.
+- **Embedding model:** the shipped default is `nomic-embed-text` only
+  (`FAMILYHUB_AMBIENT_EMBED_MODEL`), not "`embeddinggemma` or
+  `nomic-embed-text`, whichever is installed" as Component 3 speculated —
+  auto-detection between two models was not built; operators who want
+  `embeddinggemma` can still set the env var.
+- **Streaming vs. offline ASR:** the Architecture diagram's "Parakeet v3
+  (MLX, streaming)" is not what shipped. `ambient_transcriber.py` uses
+  sherpa-onnx's Silero VAD to segment speech, then does one offline decode
+  per finished segment with sherpa-onnx Parakeet-TDT v3 int8 (falling back to
+  Moonshine tiny) — consistent with the "Components" section's more precise
+  description, just not the diagram's "streaming" label.
+- Everything else (control-command shape, utterance protocol line, env knob
+  names, memory tables, trigger schema/threshold, dedupe/cooldown, DB
+  location, forget flow) matches the spec as designed.
+
 ## Out of scope (deliberately)
 
 - Speaker diarization/attribution of ambient speech (future: match voice embeddings from Family Voices enrollment; schema already has a nullable `speaker` column).

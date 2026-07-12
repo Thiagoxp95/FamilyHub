@@ -60,12 +60,24 @@ Knobs:
 
 Protocol (newline-delimited over stdio):
   stdin  : base64(int16 LINEAR16 @ 16 kHz mono) per line; OR a JSON control line
-           such as {"cmd": "reset"} (base64 never starts with "{").
-  stdout : one JSON object per line:
-             {"type": "partial"|"final", "text": str, "words": []}
+           such as {"cmd": "reset"} or {"cmd": "ambient", "on": bool} (base64
+           never starts with "{"). {"cmd":"reset"} clears wake-engine state and
+           drops any half-collected ambient VAD segment. {"cmd":"ambient"}
+           enables/disables the ambient transcriber without touching wake
+           ("on" defaults to true if omitted) — Electron sends on:false while a
+           Gemini Live session is open and on:true when it closes, so session
+           speech is never double-transcribed.
+  stdout : one JSON object per line, one of:
+             {"type": "partial"|"final", "text": str, "words": []}   (wake path)
+             {"type": "utterance", "text": str, "t0": float, "t1": float,
+              "engine": str}                                         (ambient path)
 The first emitted line is {"type":"partial","text":"","words":[]} as a ready
 signal once the model has loaded. A transcript containing the wake phrase is
-emitted only when one is confidently detected.
+emitted only when one is confidently detected. "utterance" lines are emitted
+independently by the ambient transcriber (see ambient_transcriber.py and
+sidecar/README.md § Ambient Mode) whenever ambient capture is enabled and a
+voiced segment finishes; "engine" is "parakeet-tdt-0.6b-v3-int8" or
+"moonshine-tiny" depending on which model is available.
 """
 
 import argparse
