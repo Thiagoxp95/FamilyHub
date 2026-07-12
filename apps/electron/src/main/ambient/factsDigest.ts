@@ -97,6 +97,17 @@ function buildUserPrompt(chunk: StoredUtterance[]): string {
   return chunk.map((u) => u.text).join("\n");
 }
 
+// LOCAL calendar date (same local-time semantics as shouldRunDigest).
+// toISOString() would anchor in UTC: at the 03:30 local trigger in any
+// positive-offset timezone that reports YESTERDAY's date, so the model
+// would misresolve every relative date ("tomorrow", "next tuesday", ...).
+function localIsoDate(now: number): string {
+  const d = new Date(now);
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${month}-${day}`;
+}
+
 /**
  * Reads utterances since `meta.lastDigestTs` (default: 24h before `now`),
  * chunks them into ≤4000-word batches, and asks the local LLM to distill
@@ -115,8 +126,7 @@ export async function runDigest(
   const utterances = store.utterancesBetween(t0, now);
   const chunks = chunkByWords(utterances, MAX_CHUNK_WORDS);
 
-  const todayIso = new Date(now).toISOString().slice(0, 10);
-  const system = `${SYSTEM_PROMPT_PREFIX}${todayIso}.`;
+  const system = `${SYSTEM_PROMPT_PREFIX}${localIsoDate(now)}.`;
 
   let factsAdded = 0;
   let anyChunkFailed = false;
@@ -129,6 +139,10 @@ export async function runDigest(
       continue;
     }
     for (const fact of facts) {
+      // A partial failure keeps lastDigestTs behind, so the retry reprocesses
+      // chunks that already succeeded — skip facts whose exact text is
+      // already stored instead of duplicating them.
+      if (store.hasFact(fact.text)) continue;
       store.addFact(fact.text, [], resolveExpiresAtMs(fact.expiresAt));
       factsAdded += 1;
     }
@@ -167,17 +181,50 @@ function readLastDigestTs(store: MemoryStore): number | null {
  * 03:30). Returns a cancel function that stops the interval.
  */
 export function scheduleDigest(store: MemoryStore, ollama: OllamaClient): () => void {
+  // runDigest does synchronous node:sqlite writes that can throw (disk full,
+  // WAL lock, ...). From these background-timer call sites a rejection would
+  // be unhandled and crash the main process, so every run is caught here.
+  // Log only the first failure (mirroring ipc.ts's storeQuietly precedent)
+  // to avoid one line per 30-min tick while the disk stays full.
+  let failureLogged = false;
+  function runQuietly(now: number): void {
+    runDigest(store, ollama, now).catch((error: unknown) => {
+      if (failureLogged) return;
+      failureLogged = true;
+      console.error(
+        "[factsDigest] digest run failed (further failures muted):",
+        error instanceof Error ? error.message : error,
+      );
+    });
+  }
+
   const startupNow = Date.now();
-  const startupLastTs = readLastDigestTs(store);
-  if (startupLastTs === null || startupNow - startupLastTs > CATCHUP_THRESHOLD_MS) {
-    void runDigest(store, ollama, startupNow);
+  let startupLastTs: number | null = null;
+  let startupReadFailed = false;
+  try {
+    startupLastTs = readLastDigestTs(store);
+  } catch {
+    // getMeta threw (store unhealthy); skip catch-up rather than crash —
+    // the interval below retries the read every 30 min.
+    startupReadFailed = true;
+  }
+  if (
+    !startupReadFailed &&
+    (startupLastTs === null || startupNow - startupLastTs > CATCHUP_THRESHOLD_MS)
+  ) {
+    runQuietly(startupNow);
   }
 
   const timer = setInterval(() => {
     const now = Date.now();
-    const lastTs = readLastDigestTs(store);
+    let lastTs: number | null;
+    try {
+      lastTs = readLastDigestTs(store);
+    } catch {
+      return; // store unhealthy this tick; retry next tick.
+    }
     if (shouldRunDigest(lastTs, now)) {
-      void runDigest(store, ollama, now);
+      runQuietly(now);
     }
   }, SCHEDULE_INTERVAL_MS);
 

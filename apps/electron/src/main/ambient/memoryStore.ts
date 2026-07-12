@@ -120,6 +120,14 @@ export class MemoryStore {
     return toNumber(result.lastInsertRowid);
   }
 
+  // Exact-text existence check (not LIKE/substring). Used by the nightly
+  // digest to avoid re-inserting facts from already-succeeded chunks when a
+  // partial failure forces the whole window to be reprocessed.
+  hasFact(text: string): boolean {
+    const row = this.db.prepare("SELECT 1 FROM facts WHERE text = ? LIMIT 1").get(text);
+    return row !== undefined;
+  }
+
   addFact(text: string, sourceIds: number[], expiresAt: number | null): number {
     const result = this.db
       .prepare(

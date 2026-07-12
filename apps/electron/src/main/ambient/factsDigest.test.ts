@@ -116,6 +116,73 @@ describe("runDigest", () => {
     expect(systemArg).toContain("2026-07-11");
   });
 
+  it("anchors the prompt's 'Today is' date in LOCAL time, not UTC", async () => {
+    // Pick a local wall-clock time on 2026-07-15 whose UTC calendar date is a
+    // different day, so a UTC-based toISOString() derivation would inject the
+    // wrong date. getTimezoneOffset() > 0 means west of UTC (late local
+    // evening is already tomorrow in UTC); < 0 means east of UTC (early local
+    // morning is still yesterday in UTC). Only at offset exactly 0 do the two
+    // dates never differ, in which case this degenerates to a plain date check.
+    const offsetMin = new Date(2026, 6, 15, 12, 0).getTimezoneOffset();
+    const now =
+      offsetMin > 0
+        ? new Date(2026, 6, 15, 23, 59).getTime()
+        : new Date(2026, 6, 15, 0, 5).getTime();
+    store.addUtterance("hello", "ambient", now - 1000);
+    const chatJSON = vi.fn().mockResolvedValue({ facts: [] });
+    const ollama = stubOllama(chatJSON);
+
+    await runDigest(store, ollama, now);
+
+    const systemArg = chatJSON.mock.calls[0]![0] as string;
+    expect(systemArg).toContain("2026-07-15");
+  });
+
+  it("at the 03:35 local trigger time the prompt date is the local calendar day", async () => {
+    const nowDate = new Date(2026, 6, 15, 3, 35);
+    const now = nowDate.getTime();
+    // Build the expectation from the same local-date getters so this test is
+    // correct in any timezone the suite runs in.
+    const expected = `${nowDate.getFullYear()}-${String(nowDate.getMonth() + 1).padStart(2, "0")}-${String(nowDate.getDate()).padStart(2, "0")}`;
+    store.addUtterance("hello", "ambient", now - 1000);
+    const chatJSON = vi.fn().mockResolvedValue({ facts: [] });
+    const ollama = stubOllama(chatJSON);
+
+    await runDigest(store, ollama, now);
+
+    const systemArg = chatJSON.mock.calls[0]![0] as string;
+    expect(systemArg).toContain(expected);
+  });
+
+  it("does not re-insert facts from succeeded chunks when retrying after a partial failure", async () => {
+    const now = Date.parse("2026-07-11T12:00:00.000Z");
+    const bigText = Array.from({ length: 3000 }, (_, i) => `word${i}`).join(" ");
+    store.addUtterance(bigText, "ambient", now - 3000);
+    store.addUtterance(bigText, "ambient", now - 2000);
+
+    // First run: chunk 1 succeeds, chunk 2 fails -> lastDigestTs must not
+    // advance, so the retry re-reads (and re-asks about) BOTH chunks.
+    const chatJSON = vi
+      .fn()
+      .mockResolvedValueOnce({ facts: [{ text: "fact from chunk one", expiresAt: null }] })
+      .mockResolvedValueOnce(null)
+      // Retry: both chunks succeed; chunk 1 returns the same fact again.
+      .mockResolvedValueOnce({ facts: [{ text: "fact from chunk one", expiresAt: null }] })
+      .mockResolvedValueOnce({ facts: [{ text: "fact from chunk two", expiresAt: null }] });
+    const ollama = stubOllama(chatJSON);
+
+    const added1 = await runDigest(store, ollama, now);
+    expect(added1).toBe(1);
+    expect(store.getMeta("lastDigestTs")).toBeNull();
+
+    const added2 = await runDigest(store, ollama, now + 1000);
+    expect(added2).toBe(1); // only the new chunk-two fact
+
+    expect(store.search(null, "fact from chunk one", { layer: "fact", topK: 10 })).toHaveLength(1);
+    expect(store.search(null, "fact from chunk two", { layer: "fact", topK: 10 })).toHaveLength(1);
+    expect(store.getMeta("lastDigestTs")).toBe(String(now + 1000));
+  });
+
   it("chunks utterances into batches of at most 4000 words, one chatJSON call per chunk", async () => {
     const now = Date.parse("2026-07-11T12:00:00.000Z");
     const bigText = Array.from({ length: 3000 }, (_, i) => `word${i}`).join(" ");
@@ -182,6 +249,39 @@ describe("scheduleDigest", () => {
     chatJSON.mockClear();
     await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
     expect(chatJSON).not.toHaveBeenCalled();
+  });
+
+  it("a store whose addFact throws (disk full) does not produce an unhandled rejection", async () => {
+    // The catch-up digest fires from a background timer context: a rejection
+    // escaping here would crash the main process. The failure must be caught
+    // and logged instead.
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown): void => {
+      rejections.push(reason);
+    };
+    process.on("unhandledRejection", onRejection);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      store.addUtterance("hello", "ambient", Date.now() - 1000);
+      vi.spyOn(store, "addFact").mockImplementation(() => {
+        throw new Error("SQLITE_FULL: database or disk is full");
+      });
+      const chatJSON = vi
+        .fn()
+        .mockResolvedValue({ facts: [{ text: "a fact", expiresAt: null }] });
+      const ollama = stubOllama(chatJSON);
+
+      const cancel = scheduleDigest(store, ollama);
+      await vi.waitFor(() => expect(errSpy).toHaveBeenCalled());
+      cancel();
+
+      // Let any stray rejection surface before asserting.
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onRejection);
+      errSpy.mockRestore();
+    }
   });
 
   it("does not run a catch-up digest when lastDigestTs is recent", async () => {

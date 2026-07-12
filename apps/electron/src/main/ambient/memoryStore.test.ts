@@ -166,6 +166,16 @@ describe("MemoryStore", () => {
     expect(result.texts.sort()).toEqual(["classified info here", "classified info here"]);
   });
 
+  it("hasFact reports exact-text fact existence", () => {
+    const u = store.addUtterance("x", "ambient");
+    expect(store.hasFact("milk is out")).toBe(false);
+    store.addFact("milk is out", [u], null);
+    expect(store.hasFact("milk is out")).toBe(true);
+    // Exact match only — not substring / LIKE semantics.
+    expect(store.hasFact("milk")).toBe(false);
+    expect(store.hasFact("milk is out!")).toBe(false);
+  });
+
   it("suggestion log round-trips", () => {
     const id = store.addSuggestion("reminder", "Create reminder?", { title: "x" });
     store.setSuggestionStatus(id, "dismissed");
