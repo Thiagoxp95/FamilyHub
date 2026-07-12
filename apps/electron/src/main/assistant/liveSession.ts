@@ -71,6 +71,11 @@ export const updaterToolNames = {
   installUpdate: "install_update",
 } as const;
 
+export const memoryToolNames = {
+  search: "search_memory",
+  forget: "forget_memory",
+} as const;
+
 export const dashboardToolNames = {
   showCalendar: "show_calendar_card",
   hideCalendar: "hide_calendar_card",
@@ -408,6 +413,31 @@ const conversationTools = [
           "Install a downloaded update and relaunch the app. Only works once an update has finished downloading. This restarts the app, so confirm out loud with the user before calling it.",
         parameters: { type: Type.OBJECT, properties: {} },
       },
+      {
+        name: memoryToolNames.search,
+        description:
+          "Search the household's long-term memory: everything said in the kitchen (ambient) and in past conversations with you. Use it whenever the user references something previously said, asks what was mentioned/decided/planned, or when household context would improve your answer (e.g. 'when is Jonas's party?').",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            query: { type: Type.STRING, description: "What to look for, phrased as the fact you want (e.g. 'Jonas party date')." },
+            daysBack: { type: Type.NUMBER, description: "Optionally limit to the last N days." },
+          },
+          required: ["query"],
+        },
+      },
+      {
+        name: memoryToolNames.forget,
+        description:
+          "Delete matching entries from household memory. Use when someone says to forget something (e.g. 'James, forget what we said about the surprise'). Confirm out loud what was deleted.",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            query: { type: Type.STRING, description: "Words identifying what to forget." },
+          },
+          required: ["query"],
+        },
+      },
     ],
   },
 ];
@@ -440,6 +470,7 @@ export function buildSystemInstruction(now: Date = new Date()): string {
     "For alarms use alarmsMinutesBefore (minutes before the event): [60] one hour before, [1440] one day before.",
     "After making a change, briefly confirm what you did. Keep every reply to one or two short sentences, suitable for being spoken aloud.",
     "You can manage app updates: call check_for_updates to see whether a newer version is available, download_update to download an available update immediately, and install_update to install a downloaded update and relaunch the app. Always confirm out loud before calling install_update, since it restarts the app.",
+    "You have long-term household memory via the search_memory tool — everything previously said in the kitchen. Search it before saying you don't know something about the family's plans, dates, or preferences.",
     "When the user signals they are finished — goodbye, bye, that's all, never mind, thanks that's it, stop, or shut up — do not say anything in reply; immediately call the end_conversation function with no spoken farewell.",
   ].join(" ");
 }
