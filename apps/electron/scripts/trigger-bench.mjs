@@ -72,11 +72,11 @@ Set trigger false ONLY for:
 - Strictly PAST or already-handled things: events that already happened, bills already paid, questions already answered confidently in the transcript.
 
 Examples:
-"We're out of milk again." -> {"trigger": true, "kind": "shopping", "confidence": 0.9, "suggestion": "Add milk to the shopping list?", "payload": {"item": "milk"}}
-"Jonas's party is Saturday July 18th at 2pm." -> {"trigger": true, "kind": "reminder", "confidence": 0.9, "suggestion": "Create a reminder: Jonas's party, Saturday July 18, 2pm?", "payload": {"title": "Jonas's party", "due": "2026-07-18T14:00:00"}}
-"How far is it to Grandma's house?" / "I think about two hours." -> {"trigger": true, "kind": "question", "confidence": 0.85, "suggestion": "Want me to check the distance to Grandma's house?", "payload": {"question": "How far is it to Grandma's house?"}}
-"I'm so stressed about work lately." / "That sounds rough." -> {"trigger": false, "kind": "other", "confidence": 0.9, "suggestion": "", "payload": {}}
-"Did we pay the water bill?" / "Yes, I paid it Monday." -> {"trigger": false, "kind": "other", "confidence": 0.9, "suggestion": "", "payload": {}}
+"We're almost out of ketchup." -> {"trigger": true, "kind": "shopping", "confidence": 0.9, "suggestion": "Add ketchup to the shopping list?", "payload": {"item": "ketchup"}}
+"Liam's soccer game is Friday at 5pm." -> {"trigger": true, "kind": "reminder", "confidence": 0.9, "suggestion": "Create a reminder: Liam's soccer game, Friday 5pm?", "payload": {"title": "Liam's soccer game", "due": "2026-07-17T17:00:00"}}
+"How tall is the Eiffel Tower?" / "Maybe three hundred meters?" -> {"trigger": true, "kind": "question", "confidence": 0.85, "suggestion": "Want me to look up how tall the Eiffel Tower is?", "payload": {"question": "How tall is the Eiffel Tower?"}}
+"I'm exhausted after that workout." / "You earned a rest." -> {"trigger": false, "kind": "other", "confidence": 0.9, "suggestion": "", "payload": {}}
+"Did you book the car service?" / "Yes, I did it this morning." -> {"trigger": false, "kind": "other", "confidence": 0.9, "suggestion": "", "payload": {}}
 
 If the transcript matches one of the three trigger categories, prefer trigger true. suggestion is one short sentence.`;
 // ---------------------------------------------------------------------
@@ -171,12 +171,29 @@ async function runPool(items, limit, worker) {
   return results;
 }
 
+// Mirrors triggerEngine.ts's parseTriggerResult: a response production
+// would drop (bad kind, NaN confidence, non-string suggestion, non-object
+// payload) must not count as a trigger here either.
+const TRIGGER_KINDS = new Set(["reminder", "calendar", "question", "shopping", "other"]);
+
+function isValidTriggerResult(raw) {
+  if (typeof raw !== "object" || raw === null) return false;
+  if (typeof raw.trigger !== "boolean") return false;
+  if (typeof raw.kind !== "string" || !TRIGGER_KINDS.has(raw.kind)) return false;
+  if (typeof raw.confidence !== "number" || Number.isNaN(raw.confidence)) return false;
+  if (typeof raw.suggestion !== "string") return false;
+  if (typeof raw.payload !== "object" || raw.payload === null || Array.isArray(raw.payload)) {
+    return false;
+  }
+  return true;
+}
+
 async function classify(caseEntry, now) {
   const system = buildSystemPrompt(now);
   try {
     const raw = await chatJSON(system, caseEntry.window);
-    const trigger = raw?.trigger === true && typeof raw?.confidence === "number" &&
-      raw.confidence >= CONFIDENCE_THRESHOLD;
+    const trigger =
+      isValidTriggerResult(raw) && raw.trigger && raw.confidence >= CONFIDENCE_THRESHOLD;
     return { ok: true, trigger, raw };
   } catch (err) {
     return { ok: false, trigger: false, error: err instanceof Error ? err.message : String(err) };
