@@ -272,6 +272,76 @@ describe("SuggestionService", () => {
     });
   });
 
+  describe("store write resilience", () => {
+    it("expiry timer fires without crashing when setSuggestionStatus throws, and still emits the resolve event", () => {
+      vi.useFakeTimers();
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { service, sendLive, setStatus } = makeService({ timeoutMs: 30_000 });
+      setStatus.mockImplementation(() => {
+        throw new Error("disk full");
+      });
+
+      service.show(suggestionFixture());
+      const id = shownId(sendLive);
+      sendLive.mockClear();
+
+      // The throw happens inside a plain setTimeout callback — if unguarded it
+      // would be an uncaught exception and crash the main process.
+      expect(() => vi.advanceTimersByTime(30_000)).not.toThrow();
+
+      expect(sendLive).toHaveBeenCalledWith({ type: "suggestionResolved", id, status: "expired" });
+      consoleError.mockRestore();
+    });
+
+    it("show() degrades without throwing when addSuggestion throws", () => {
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { service, sendLive } = makeService();
+      vi.spyOn(store, "addSuggestion").mockImplementation(() => {
+        throw new Error("disk full");
+      });
+
+      expect(() => service.show(suggestionFixture())).not.toThrow();
+      expect(sendLive).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "suggestion" }),
+      );
+      consoleError.mockRestore();
+    });
+
+    it("logs the first store-write failure only (repeat failures stay quiet)", () => {
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { service, sendLive, setStatus } = makeService();
+      setStatus.mockImplementation(() => {
+        throw new Error("disk full");
+      });
+
+      service.show(suggestionFixture());
+      service.dismiss(shownId(sendLive));
+      sendLive.mockClear();
+      service.show(suggestionFixture({ suggestion: "second" }));
+      service.dismiss(shownId(sendLive));
+
+      const storeFailureLogs = consoleError.mock.calls.filter((c) =>
+        String(c[0]).includes("store write failed"),
+      );
+      expect(storeFailureLogs).toHaveLength(1);
+      consoleError.mockRestore();
+    });
+  });
+
+  it("logs a traceable line when the accept tool call fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const runTool = vi.fn<ToolRunner>().mockRejectedValue(new Error("AppleScript timed out"));
+    const { service, sendLive } = makeService({ runTool });
+
+    service.show(suggestionFixture());
+    await service.accept(shownId(sendLive));
+
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining("AppleScript timed out"),
+    );
+    consoleError.mockRestore();
+  });
+
   it("a second show() while one is visible expires the first", () => {
     vi.useFakeTimers();
     const { service, sendLive, setStatus } = makeService();

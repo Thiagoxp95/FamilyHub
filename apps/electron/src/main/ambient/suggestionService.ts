@@ -39,6 +39,10 @@ function str(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export class SuggestionService {
   private readonly store: MemoryStore;
   private readonly sendLive: (event: LiveStateEvent) => void;
@@ -48,6 +52,13 @@ export class SuggestionService {
   private readonly now: () => number;
 
   private visible: VisibleCard | null = null;
+  // Store writes are synchronous node:sqlite and can throw after a healthy
+  // startup (disk full, WAL lock, ...). Two of them run where a throw would be
+  // an uncaught exception in the main process: the setTimeout expiry callback
+  // and the fire-and-forget voice-accept path. Mirror ipc.ts's storeQuietly —
+  // swallow, and log only the first failure so a full disk doesn't spam a
+  // line per card.
+  private storeWriteFailureLogged = false;
 
   constructor(options: SuggestionServiceOptions) {
     this.store = options.store;
@@ -64,7 +75,13 @@ export class SuggestionService {
       this.resolveVisible("expired");
     }
 
-    const id = this.store.addSuggestion(suggestion.kind, suggestion.suggestion, suggestion.payload);
+    // No suggestion row means no id for the renderer to accept/dismiss with,
+    // so a failed insert degrades to "this card never existed".
+    const id = this.addSuggestionQuietly(suggestion);
+    if (id === null) {
+      return;
+    }
+
     const timer = setTimeout(() => {
       this.resolveVisible("expired");
     }, this.timeoutMs);
@@ -93,12 +110,16 @@ export class SuggestionService {
 
     try {
       await this.runMappedTool(card.suggestion);
-    } catch {
+    } catch (error) {
       // A tool failure must not leave the service wedged — the card still
-      // resolves as accepted so the UI doesn't get stuck.
+      // resolves as accepted so the UI doesn't get stuck. Log so a failed
+      // create_reminder/create_event is traceable in the field.
+      console.error(
+        `[suggestions] accept tool call failed for "${card.suggestion.suggestion}" (${card.suggestion.kind}): ${errorMessage(error)}`,
+      );
     }
 
-    this.store.setSuggestionStatus(card.id, "accepted");
+    this.setStatusQuietly(card.id, "accepted");
     this.sendLive({ type: "suggestionResolved", id: card.id, status: "accepted" });
   }
 
@@ -113,12 +134,39 @@ export class SuggestionService {
     clearTimeout(card.timer);
     this.visible = null;
 
-    this.store.setSuggestionStatus(card.id, status);
+    this.setStatusQuietly(card.id, status);
     this.sendLive({ type: "suggestionResolved", id: card.id, status });
 
     if (status === "dismissed") {
       this.onDismissed();
     }
+  }
+
+  private addSuggestionQuietly(suggestion: TriggerSuggestion): number | null {
+    try {
+      return this.store.addSuggestion(suggestion.kind, suggestion.suggestion, suggestion.payload);
+    } catch (error) {
+      this.noteStoreWriteFailure(error);
+      return null;
+    }
+  }
+
+  private setStatusQuietly(id: number, status: "accepted" | "dismissed" | "expired"): void {
+    try {
+      this.store.setSuggestionStatus(id, status);
+    } catch (error) {
+      this.noteStoreWriteFailure(error);
+    }
+  }
+
+  private noteStoreWriteFailure(error: unknown): void {
+    if (this.storeWriteFailureLogged) {
+      return;
+    }
+    this.storeWriteFailureLogged = true;
+    console.error(
+      `[suggestions] store write failed (further failures muted): ${errorMessage(error)}`,
+    );
   }
 
   private async runMappedTool(suggestion: TriggerSuggestion): Promise<void> {
