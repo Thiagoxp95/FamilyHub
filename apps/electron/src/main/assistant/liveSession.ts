@@ -1,4 +1,5 @@
 import {
+  EndSensitivity,
   GoogleGenAI,
   Modality,
   Type,
@@ -601,6 +602,16 @@ export class GeminiLiveSession {
           voiceConfig: { prebuiltVoiceConfig: { voiceName: this.voiceName } },
         },
         systemInstruction: { parts: [{ text: this.systemInstruction }] },
+        // The server default end-of-speech sensitivity is LOW, which waits a
+        // long silence before deciding the user finished — the largest slice of
+        // the perceived reply lag. HIGH commits end-of-turn sooner. Start
+        // sensitivity is left at default so background kitchen noise doesn't
+        // trigger false barge-ins.
+        realtimeInputConfig: {
+          automaticActivityDetection: {
+            endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_HIGH,
+          },
+        },
         tools: conversationTools,
         // Audio-only Live sessions have a ~15-min server-side duration cap, after
         // which Gemini sends `goAway` and disconnects. A sliding-window context

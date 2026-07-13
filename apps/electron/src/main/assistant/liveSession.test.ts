@@ -12,6 +12,7 @@ vi.mock("@google/genai", () => ({
   GoogleGenAI: vi.fn(function GoogleGenAI() {
     return { live: { connect: connectMock } };
   }),
+  EndSensitivity: { END_SENSITIVITY_HIGH: "END_SENSITIVITY_HIGH" },
   Modality: { AUDIO: "AUDIO" },
   Type: {
     ARRAY: "ARRAY",
@@ -181,6 +182,22 @@ describe("GeminiLiveSession", () => {
     expect(instruction).toContain("family Calendar, Reminders, and Notes");
     expect(instruction).toContain("show_notes_card");
     expect(instruction).toContain("show_weather_card");
+  });
+
+  it("configures high end-of-speech sensitivity so replies start sooner", async () => {
+    mockConnectReady();
+
+    await new GeminiLiveSession({ apiKey: "test-key" }).start({
+      onClosed: vi.fn(),
+      onError: vi.fn(),
+      onEvent: vi.fn(),
+    });
+
+    const connectConfig = connectMock.mock.calls[0]?.[0];
+    const detection =
+      connectConfig?.config?.realtimeInputConfig?.automaticActivityDetection;
+
+    expect(detection?.endOfSpeechSensitivity).toBe("END_SENSITIVITY_HIGH");
   });
 
   it("registers note CRUD tools and quadrant focus tools", async () => {

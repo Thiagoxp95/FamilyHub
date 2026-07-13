@@ -165,6 +165,13 @@ function fireAudioCallback(ctx: FakeAudioContext): void {
 }
 
 describe("startMicrophoneLoop resilience", () => {
+  it("ships captured audio within 30 ms so live replies aren't delayed by batching", async () => {
+    await start();
+    fireAudioCallback(firstCtx());
+    await vi.advanceTimersByTimeAsync(30);
+    expect(sendMicFrame).toHaveBeenCalledTimes(1);
+  });
+
   it("resumes the capture context on creation (parity with playback)", async () => {
     await start();
     expect(firstCtx().resume).toHaveBeenCalled();

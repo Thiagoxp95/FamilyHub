@@ -712,10 +712,10 @@ export async function startMicrophoneLoop({
     ctx.addEventListener("statechange", handleStateChange);
 
     const source = ctx.createMediaStreamSource(stream);
-    // 1024 samples @ 16 kHz = 64 ms callbacks. The previous 4096 (256 ms)
-    // buffer added ~190 ms average delay before audio even reached the wake
-    // sidecar — a big slice of the perceived wake latency.
-    const processor = ctx.createScriptProcessor(1024, 1, 1);
+    // 512 samples @ 16 kHz = 32 ms callbacks. Historically 4096 (256 ms), then
+    // 1024 (64 ms) — each halving trims average delay before audio reaches the
+    // wake sidecar and, mid-session, the Gemini Live socket.
+    const processor = ctx.createScriptProcessor(512, 1, 1);
     const mutedOutput = ctx.createGain();
     let pendingSamples: number[] = [];
     let smoothedLevel = 0;
@@ -760,7 +760,7 @@ export async function startMicrophoneLoop({
       pendingSamples = [];
       const pcm = convertFloatSamplesToLinear16(samples);
       window.familyHub.assistant.sendMicFrame(int16ToBase64(pcm));
-    }, 60);
+    }, 30);
 
     // Fire onStall once if the audio render thread stops pulling frames. The
     // owner tears this loop down (clearing this watchdog) and rebuilds against
