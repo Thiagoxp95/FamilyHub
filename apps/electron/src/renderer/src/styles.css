@@ -2375,3 +2375,14 @@ body.hub-modal-open {
     animation: none;
   }
 }
+
+/* Always-on "James is listening" rim (ListeningBorder.tsx). Fixed over the
+   whole viewport, above every panel/badge (max elsewhere is 110), and
+   non-interactive so taps pass straight through to the dashboard. The shader
+   canvas has a transparent background, so only the glow overlays the UI. */
+.listening-border {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  pointer-events: none;
+}

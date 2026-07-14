@@ -7,6 +7,7 @@ import { MicPicker } from "./MicPicker";
 import { pickPreferredMicId } from "./micSelection";
 import { NotesPanel } from "./NotesPanel";
 import { RemindersPanel } from "./RemindersPanel";
+import { ListeningBorder } from "./ListeningBorder";
 import { type ActiveCard, SuggestionCard } from "./SuggestionCard";
 import { UpdateControl } from "./UpdateControl";
 import { WeatherPanel } from "./WeatherPanel";
@@ -333,6 +334,21 @@ export function App(): React.JSX.Element {
 
   return (
     <div className={sessionActive ? "kiosk kiosk--live" : "kiosk"}>
+      {/* Always-on "James is listening" rim around the whole screen. Hidden
+          while Family Setup owns the mic (capture is torn down then) or the
+          listener isn't running at all. */}
+      {snapshot.isListening && !familySetupOpen ? (
+        <ListeningBorder
+          mode={
+            liveMode === "wake"
+              ? "idle"
+              : liveMode === "connecting"
+                ? "connecting"
+                : "live"
+          }
+        />
+      ) : null}
+
       {/* Seamless top-left corner (clears the inset traffic lights): pick which
           microphone listens for the wake word. */}
       <div className="mic-corner">
