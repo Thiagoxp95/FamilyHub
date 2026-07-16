@@ -15,10 +15,17 @@ import {
   computerToolName,
   dashboardToolNames,
   endConversationToolName,
+  stayOutToolName,
   type LiveEvent,
   type LiveSessionHandlers,
 } from "./liveSession";
 import type { AmbientUtterance, LocalTranscriber } from "./localTranscriber";
+
+// After this many consecutive stay_out_of_conversation calls (James judging
+// turn after turn "that speech wasn't for me"), the wake was clearly a false
+// trigger or the family has moved on — end the session silently rather than
+// leaving a hot mic on a conversation that isn't his.
+const maxNotAddressedTurns = 3;
 
 // The "zoom a quadrant to full screen" tool calls. While a computer-control task
 // owns the screen, Gemini sometimes reflexively fires one of these (usually
@@ -163,6 +170,9 @@ export class LiveController {
   private inputTurnBuffer = "";
   private outputTurnBuffer = "";
   private pendingReason: string | null = null;
+  // Consecutive turns James sat out via stay_out_of_conversation. Reset the
+  // moment he actually engages (speaks or runs a real tool).
+  private notAddressedStreak = 0;
   private listenerReady = false;
 
   constructor(options: LiveControllerOptions) {
@@ -315,6 +325,7 @@ export class LiveController {
     this.computerTasksInFlight = 0;
     this.inputTurnBuffer = "";
     this.outputTurnBuffer = "";
+    this.notAddressedStreak = 0;
     // Acknowledge the wake IMMEDIATELY, before the Gemini connect (median
     // ~400 ms, tail 1.4–2.5 s). The renderer shows the voice strip on
     // "connecting", so the user sees the wake land the moment it fires instead
@@ -438,6 +449,9 @@ export class LiveController {
         // trip the idle timeout and kill the session mid-sentence. Re-arm on every
         // output chunk so the countdown only runs once James actually goes quiet.
         this.armIdleTimer();
+        // Speaking deliberately means he's engaged — the sat-out turns before
+        // this no longer count toward bowing out.
+        this.notAddressedStreak = 0;
         this.outputTurnBuffer += event.text;
         this.sink.sendLive({
           type: "outputTranscript",
@@ -462,6 +476,26 @@ export class LiveController {
               : "said goodbye";
           this.apply({ type: "stop" });
           return;
+        } else if (event.name === stayOutToolName) {
+          // James judged the speech wasn't addressed to him and chose silence
+          // over replying. Acknowledge so the turn completes with no audio.
+          this.session?.sendToolResponse(event.id, event.name, { ok: true });
+          this.notAddressedStreak += 1;
+          const overheard =
+            typeof event.args.reason === "string" && event.args.reason.trim()
+              ? ` (${event.args.reason.trim()})`
+              : "";
+          this.sink.noteInfo(`🤫 stayed out of the conversation${overheard}`);
+
+          if (this.notAddressedStreak >= maxNotAddressedTurns) {
+            // Turn after turn of not-my-conversation: the wake was a false
+            // trigger (or the family moved on) — bow out silently.
+            this.pendingReason = "not part of the conversation";
+            this.apply({ type: "stop" });
+            return;
+          }
+
+          this.armIdleTimer();
         } else if (
           dashboardShowToolNames.has(event.name) &&
           this.computerTasksInFlight > 0
@@ -476,6 +510,7 @@ export class LiveController {
           // (completing a reminder) or a 180s computer task is legitimate work,
           // not silence, and must not trip the timeout mid-call. runToolCall
           // re-arms the timer once every in-flight tool has responded.
+          this.notAddressedStreak = 0;
           this.clearIdleTimer();
           void this.runToolCall(event.id, event.name, event.args);
         }

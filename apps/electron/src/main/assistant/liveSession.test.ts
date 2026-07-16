@@ -166,7 +166,7 @@ describe("GeminiLiveSession", () => {
     expect(instruction).toContain("no spoken farewell");
   });
 
-  it("tells the model to stay silent on accidental wakes until genuinely addressed", async () => {
+  it("tells the model to judge every turn and stay out of overheard conversation", async () => {
     mockConnectReady();
 
     await new GeminiLiveSession({ apiKey: "test-key" }).start({
@@ -180,9 +180,29 @@ describe("GeminiLiveSession", () => {
       connectConfig?.config?.systemInstruction?.parts?.[0]?.text;
 
     expect(instruction).toContain("fires by accident");
+    expect(instruction).toContain("Before EVERY reply");
     expect(instruction).toContain("people talking to each other");
-    expect(instruction).toContain("stay completely silent");
+    expect(instruction).toContain("stay_out_of_conversation");
     expect(instruction).toContain("call end_conversation silently");
+  });
+
+  it("declares the stay_out_of_conversation tool so silence is a real choice", async () => {
+    mockConnectReady();
+
+    await new GeminiLiveSession({ apiKey: "test-key" }).start({
+      onClosed: vi.fn(),
+      onError: vi.fn(),
+      onEvent: vi.fn(),
+    });
+
+    const connectConfig = connectMock.mock.calls[0]?.[0];
+    const declarations =
+      connectConfig?.config?.tools?.find(
+        (tool: { functionDeclarations?: unknown[] }) => tool.functionDeclarations,
+      )?.functionDeclarations ?? [];
+    const names = declarations.map((tool: { name?: string }) => tool.name);
+
+    expect(names).toContain("stay_out_of_conversation");
   });
 
   it("tells the model to manage notes and zoom the active dashboard quadrant", async () => {

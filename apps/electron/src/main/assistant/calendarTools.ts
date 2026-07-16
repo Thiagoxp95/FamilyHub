@@ -381,6 +381,14 @@ return theName`;
   return { list: stdout.trim() || input.list || "Reminders" };
 }
 
+// A mutation aimed at a reminder that no longer exists (deleted directly in
+// Apple's Reminders while our cached snapshot still listed it). osascript
+// surfaces it as `Can't get reminder id "…" (-1728)`. For complete/delete the
+// goal state is already reached, so callers treat this as success.
+export function isReminderMissing(message: string): boolean {
+  return /can't get reminder id/i.test(message) || message.includes("(-1728)");
+}
+
 // Address the reminder directly by id instead of scanning every list with a
 // `whose id is` predicate. The scan walks all reminders (including hundreds of
 // completed ones) and takes tens of seconds on long lists, which overran the

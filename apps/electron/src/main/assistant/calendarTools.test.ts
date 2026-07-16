@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createEvent,
+  isReminderMissing,
   isSameEvent,
   isSameReminder,
   listEvents,
@@ -230,6 +231,28 @@ describe("updateReminder", () => {
     await updateReminder({ id: "rem-1" });
 
     expect(runWithLaunchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("isReminderMissing", () => {
+  it("matches osascript's stale-id diagnostic", () => {
+    expect(
+      isReminderMissing(
+        'execution error: Reminders got an error: Can\'t get reminder id "x-apple-reminderkit://REMCDReminder/ABC". (-1728)',
+      ),
+    ).toBe(true);
+  });
+
+  it("matches the bare -1728 error number", () => {
+    expect(isReminderMissing("some odd wrapper (-1728)")).toBe(true);
+  });
+
+  it("does not match unrelated failures (auth, timeout)", () => {
+    expect(
+      isReminderMissing("Not authorized to send Apple events to Reminders. (-1743)"),
+    ).toBe(false);
+    expect(isReminderMissing("timed out")).toBe(false);
+    expect(isReminderMissing("unavailable")).toBe(false);
   });
 });
 

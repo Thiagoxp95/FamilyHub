@@ -608,4 +608,83 @@ describe("LiveController", () => {
 
     await expect(sessions[0]?.close()).resolves.toBeUndefined();
   });
+
+  it("acknowledges stay_out_of_conversation silently without closing the session", async () => {
+    const { transcriber, sessions } = await setup();
+
+    transcriber.emit("hey james hello");
+    await vi.waitFor(() => expect(sessions).toHaveLength(1));
+    const session = sessions[0];
+
+    session?.handlers?.onEvent({
+      kind: "toolCall",
+      id: "t1",
+      name: "stay_out_of_conversation",
+      args: { reason: "two people telling a story" },
+    });
+
+    await vi.waitFor(() => expect(session?.toolResponses).toHaveLength(1));
+    expect(session?.toolResponses[0]).toEqual({
+      id: "t1",
+      name: "stay_out_of_conversation",
+    });
+    expect(session?.closed).toBe(false);
+  });
+
+  it("ends the session silently after three consecutive stay-out turns", async () => {
+    const { transcriber, sessions, sink } = await setup();
+
+    transcriber.emit("hey james hello");
+    await vi.waitFor(() => expect(sessions).toHaveLength(1));
+    const session = sessions[0];
+
+    for (const id of ["t1", "t2", "t3"]) {
+      session?.handlers?.onEvent({
+        kind: "toolCall",
+        id,
+        name: "stay_out_of_conversation",
+        args: {},
+      });
+    }
+
+    await vi.waitFor(() => expect(session?.closed).toBe(true));
+    expect(sink.live).toContainEqual({
+      type: "status",
+      message: "Session ended (not part of the conversation).",
+    });
+    expect(sink.live).toContainEqual({ type: "mode", mode: "wake" });
+  });
+
+  it("resets the stay-out streak once the assistant actually speaks", async () => {
+    const { transcriber, sessions } = await setup();
+
+    transcriber.emit("hey james hello");
+    await vi.waitFor(() => expect(sessions).toHaveLength(1));
+    const session = sessions[0];
+
+    for (const id of ["t1", "t2"]) {
+      session?.handlers?.onEvent({
+        kind: "toolCall",
+        id,
+        name: "stay_out_of_conversation",
+        args: {},
+      });
+    }
+
+    // James replies to a genuine question — the sat-out turns no longer count.
+    session?.handlers?.onEvent({
+      kind: "outputTranscript",
+      text: "It is at 3pm.",
+    });
+
+    session?.handlers?.onEvent({
+      kind: "toolCall",
+      id: "t3",
+      name: "stay_out_of_conversation",
+      args: {},
+    });
+
+    await vi.waitFor(() => expect(session?.toolResponses).toHaveLength(3));
+    expect(session?.closed).toBe(false);
+  });
 });

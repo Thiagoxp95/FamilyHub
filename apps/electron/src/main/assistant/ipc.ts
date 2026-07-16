@@ -168,6 +168,23 @@ export function registerAssistantIpc(
     },
   };
 
+  // Run a complete/delete reminder mutation WITHOUT blocking the live turn
+  // (the tool already answered ok — optimistically). A "can't get reminder id"
+  // failure means the item was already gone (deleted directly in Apple's
+  // Reminders while our cached id was stale): the goal state is reached, so it
+  // is not an error. Whatever happens, the panel refreshes back to truth — a
+  // genuinely failed mutation resurfaces the row.
+  const reconcileReminderMutation = (mutate: () => Promise<void>): void => {
+    void mutate()
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!calendarTools.isReminderMissing(message)) {
+          service.noteInfo(`🛠 reminder mutation failed: ${message}`);
+        }
+      })
+      .finally(() => void dashboard?.refreshReminders());
+  };
+
   // Dispatch a Gemini tool call to the Calendar/Reminders/Notes layer, refreshing
   // the affected dashboard card after a write so the change shows immediately.
   const runTool: ToolRunner = async (name, args) => {
@@ -285,29 +302,52 @@ export function registerAssistantIpc(
       }
       case calendarToolNames.updateReminder:
         dashboard?.focusPanel("reminders");
-        await calendarTools.updateReminder({
-          id: str(args.id),
-          title: optStr(args.title),
-          due: optStr(args.due),
-          notes: optStr(args.notes),
-        });
+        try {
+          await calendarTools.updateReminder({
+            id: str(args.id),
+            title: optStr(args.title),
+            due: optStr(args.due),
+            notes: optStr(args.notes),
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (calendarTools.isReminderMissing(message)) {
+            // Our cached id was stale — it was deleted in Apple's Reminders
+            // directly. Drop the ghost row and tell James plainly.
+            void dashboard?.refreshReminders();
+            return {
+              ok: false,
+              error: "That reminder no longer exists — it was already removed.",
+            };
+          }
+          throw error;
+        }
         void dashboard?.refreshReminders();
         return { ok: true };
       case calendarToolNames.completeReminder: {
         dashboard?.focusPanel("reminders");
         const completingId = str(args.id);
-        // Optimistically strike the item through in the UI before the slow
-        // AppleScript mutation (and even slower refresh) lands.
+        // Optimistic: strike the item through and confirm to Gemini
+        // IMMEDIATELY. The AppleScript mutation (seconds — tens of seconds if
+        // Reminders has to launch) reconciles in the background, so James
+        // replies right away instead of going mute mid-turn.
         dashboard?.markReminderCompleting(completingId);
-        await calendarTools.completeReminder(completingId);
-        void dashboard?.refreshReminders();
+        reconcileReminderMutation(() =>
+          calendarTools.completeReminder(completingId),
+        );
         return { ok: true };
       }
-      case calendarToolNames.deleteReminder:
+      case calendarToolNames.deleteReminder: {
         dashboard?.focusPanel("reminders");
-        await calendarTools.deleteReminder(str(args.id));
-        void dashboard?.refreshReminders();
+        const deletingId = str(args.id);
+        // Same optimistic treatment as complete: the row strikes through now
+        // and vanishes on the post-mutation refresh.
+        dashboard?.markReminderCompleting(deletingId);
+        reconcileReminderMutation(() =>
+          calendarTools.deleteReminder(deletingId),
+        );
         return { ok: true };
+      }
       case noteToolNames.getNotes:
         dashboard?.focusPanel("notes");
         return dashboard
