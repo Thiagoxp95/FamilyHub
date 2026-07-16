@@ -1,24 +1,23 @@
 import { PulsingBorder } from "@paper-design/shaders-react";
 
-// Full-screen neon rim that says "James is listening" at a glance, replacing
-// the tiny voice-orb dot as the primary cue. Always present while the mic loop
-// runs; the glow intensifies as the assistant moves idle → waking → live.
+// Full-screen neon rim that says "James is awake" at a glance. Rendered ONLY
+// while the assistant has been triggered — from the wake firing ("connecting")
+// through the live conversation. While the app merely waits for the wake word
+// there is no rim at all.
 //
 // The shader fills its canvas with colorBack; fully transparent ("#00000000")
 // leaves only the glow, which composites cleanly over this app's light theme
 // (a screen/multiply blend would not). pointer-events stays none on the
 // wrapper so the overlay never eats taps.
 
-export type ListeningBorderMode = "idle" | "connecting" | "live";
+export type ListeningBorderMode = "connecting" | "live";
 
-// One knob-set per assistant state. Idle is the user-approved baseline config;
-// waking/live scale intensity, speed, and bloom up so the border itself
-// communicates the mode.
+// One knob-set per session state: connecting is a softer ramp-up, live is the
+// full glow so the border itself communicates the mode.
 const modeKnobs: Record<
   ListeningBorderMode,
   { intensity: number; speed: number; bloom: number; pulse: number }
 > = {
-  idle: { intensity: 0.2, speed: 1, bloom: 0.25, pulse: 0.25 },
   connecting: { intensity: 0.5, speed: 1.6, bloom: 0.4, pulse: 0.45 },
   live: { intensity: 0.8, speed: 2.2, bloom: 0.6, pulse: 0.6 },
 };

@@ -166,6 +166,25 @@ describe("GeminiLiveSession", () => {
     expect(instruction).toContain("no spoken farewell");
   });
 
+  it("tells the model to stay silent on accidental wakes until genuinely addressed", async () => {
+    mockConnectReady();
+
+    await new GeminiLiveSession({ apiKey: "test-key" }).start({
+      onClosed: vi.fn(),
+      onError: vi.fn(),
+      onEvent: vi.fn(),
+    });
+
+    const connectConfig = connectMock.mock.calls[0]?.[0];
+    const instruction =
+      connectConfig?.config?.systemInstruction?.parts?.[0]?.text;
+
+    expect(instruction).toContain("fires by accident");
+    expect(instruction).toContain("people talking to each other");
+    expect(instruction).toContain("stay completely silent");
+    expect(instruction).toContain("call end_conversation silently");
+  });
+
   it("tells the model to manage notes and zoom the active dashboard quadrant", async () => {
     mockConnectReady();
 

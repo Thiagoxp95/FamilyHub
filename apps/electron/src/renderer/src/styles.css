@@ -160,13 +160,16 @@ button:disabled {
   gap: 9px;
 }
 
-/* ---------- 2x2 quadrant grid ---------- */
+/* ---------- Main panel grid: two full-height columns ---------- */
+/* Calendar + Reminders only (weather lives in the top strip, notes hidden) so
+   each panel gets double the old quadrant area — readable from across the
+   kitchen. */
 .quad-grid {
   display: grid;
   flex: 1 1 auto;
   gap: 14px;
   grid-template-columns: 1fr 1fr;
-  grid-template-rows: 1fr 1fr;
+  grid-template-rows: 1fr;
   min-height: 0;
 }
 
@@ -2112,7 +2115,7 @@ body.hub-modal-open {
 
   .quad-grid {
     grid-template-columns: 1fr;
-    grid-template-rows: repeat(4, minmax(320px, 1fr));
+    grid-template-rows: repeat(2, minmax(320px, 1fr));
   }
 
   .weather-row {
@@ -2285,9 +2288,60 @@ body.hub-modal-open {
 }
 
 /* Idle card: same shell as the live strip, but holding the dual-timezone
-   clock instead of a conversation. */
+   clock plus the compact weather readout (the weather quadrant is gone). */
 .voice-strip--clock {
-  grid-template-columns: 56px minmax(0, 1fr);
+  grid-template-columns: 56px minmax(0, 1fr) auto;
+}
+
+/* Compact weather readout inside the clock strip. A button (tap opens the
+   fullscreen weather view) styled as passive glass chrome, not a pill CTA. */
+.weather-strip {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--hub-stroke-soft);
+  border-radius: var(--hub-radius-sm);
+  color: var(--hub-text);
+  display: inline-flex;
+  gap: 14px;
+  min-height: 0;
+  padding: 10px 18px;
+}
+
+.weather-strip:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+  filter: none;
+  transform: none;
+}
+
+.weather-strip__emoji {
+  font-size: 34px;
+  line-height: 1;
+}
+
+.weather-strip__temp {
+  font-size: clamp(1.65rem, 3.4vw, 2.9rem);
+  font-variant-numeric: tabular-nums;
+  font-weight: 300;
+  line-height: 1;
+}
+
+.weather-strip__side {
+  display: grid;
+  gap: 3px;
+  text-align: left;
+}
+
+.weather-strip__desc {
+  color: var(--hub-text);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.weather-strip__range {
+  color: var(--hub-text-2);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .clock-row {
@@ -2376,13 +2430,100 @@ body.hub-modal-open {
   }
 }
 
-/* Always-on "James is listening" rim (ListeningBorder.tsx). Fixed over the
-   whole viewport, above every panel/badge (max elsewhere is 110), and
-   non-interactive so taps pass straight through to the dashboard. The shader
-   canvas has a transparent background, so only the glow overlays the UI. */
+/* "James is awake" rim (ListeningBorder.tsx), rendered only while a session
+   is connecting/live. Fixed over the whole viewport, above every panel/badge
+   (max elsewhere is 110), and non-interactive so taps pass straight through
+   to the dashboard. The shader canvas has a transparent background, so only
+   the glow overlays the UI. */
 .listening-border {
   position: fixed;
   inset: 0;
   z-index: 200;
   pointer-events: none;
+}
+
+/* ---------- Far-view scale (monitor is across the kitchen) ---------- */
+/* Scoped to the dashboard grid so the fullscreen/expanded variants keep their
+   own sizing. */
+.quad-grid .quad-head h2 {
+  font-size: 15px;
+}
+
+.quad-grid .cal-day-head {
+  font-size: 15px;
+  margin-block-end: 12px;
+}
+
+.quad-grid .cal-agenda {
+  gap: 26px;
+}
+
+.quad-grid .cal-item {
+  gap: 18px;
+  min-height: 64px;
+  padding: 12px 0;
+}
+
+.quad-grid .cal-time {
+  flex-basis: 104px;
+  font-size: 19px;
+}
+
+.quad-grid .cal-title {
+  font-size: 23px;
+}
+
+.quad-grid .cal-cal {
+  font-size: 15px;
+}
+
+.quad-grid .rem-tab {
+  font-size: 16px;
+  min-height: 40px;
+  padding: 0 16px;
+}
+
+.quad-grid .rem-count {
+  font-size: 13px;
+}
+
+.quad-grid .rem-item {
+  min-height: 60px;
+  padding: 13px 16px;
+}
+
+.quad-grid .rem-title {
+  font-size: 21px;
+}
+
+.quad-grid .rem-due {
+  font-size: 15px;
+}
+
+/* ---------- Night blanking ---------- */
+/* Solid black sheet above everything (listening border tops out at 200) once
+   the kitchen has been silent long enough. Eases in so a passing glance never
+   catches an abrupt cut; wake (touch/sound/session) unmounts it instantly. */
+.night-screen {
+  animation: night-fade-in 1.6s ease both;
+  background: #000000;
+  cursor: none;
+  inset: 0;
+  position: fixed;
+  z-index: 300;
+}
+
+@keyframes night-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .night-screen {
+    animation: none;
+  }
 }

@@ -8,9 +8,15 @@ import { pickPreferredMicId } from "./micSelection";
 import { NotesPanel } from "./NotesPanel";
 import { RemindersPanel } from "./RemindersPanel";
 import { ListeningBorder } from "./ListeningBorder";
+import {
+  createNightWatchState,
+  reduceNightWatch,
+  type NightWatchEvent,
+  type NightWatchState,
+} from "./nightWatch";
 import { type ActiveCard, SuggestionCard } from "./SuggestionCard";
 import { UpdateControl } from "./UpdateControl";
-import { WeatherPanel } from "./WeatherPanel";
+import { WeatherPanel, WeatherStrip } from "./WeatherPanel";
 
 // Persisted across restarts so the kitchen Mac keeps the chosen wake-word mic.
 // Empty string means "let the OS pick the default input".
@@ -67,6 +73,29 @@ export function App(): React.JSX.Element {
   const [familySetupOpen, setFamilySetupOpen] = useState(false);
   const [suggestion, setSuggestion] = useState<ActiveCard | null>(null);
   const playerRef = useRef<AudioPlayer | null>(null);
+
+  // Night blanking: after a sustained stretch with no sound on the wake mic
+  // the display goes black (no light leaking toward the bedroom). Sustained
+  // sound, a touch/key, or an assistant session wakes it. Wake-word capture
+  // keeps running underneath, so "Hey James" also lights it back up.
+  const [screenOff, setScreenOff] = useState(false);
+  const nightRef = useRef<NightWatchState>(createNightWatchState(Date.now()));
+  const liveModeRef = useRef<LiveMode>("wake");
+
+  const dispatchNight = useCallback((event: NightWatchEvent): void => {
+    const next = reduceNightWatch(nightRef.current, event);
+    nightRef.current = next;
+    // Same-boolean sets bail out of re-rendering, so feeding this from the
+    // ~32 ms mic-level callback is cheap.
+    setScreenOff(next.screenOff);
+  }, []);
+
+  const handleMicLevel = useCallback(
+    (level: number): void => {
+      dispatchNight({ type: "level", level, now: Date.now() });
+    },
+    [dispatchNight],
+  );
 
   // Device labels are only populated once a getUserMedia grant has happened, so
   // this is also called from the capture loop's onReady (not just on mount).
@@ -209,6 +238,42 @@ export function App(): React.JSX.Element {
     void runAction(() => window.familyHub.assistant.startListening());
   }, [autoStartAttempted, snapshot.isListening]);
 
+  // A session opening (wake word fired) is direct presence — wake the screen
+  // the instant "connecting" lands, before any UI renders under the overlay.
+  useEffect(() => {
+    liveModeRef.current = liveMode;
+
+    if (liveMode !== "wake") {
+      dispatchNight({ type: "activity", now: Date.now() });
+    }
+  }, [liveMode, dispatchNight]);
+
+  // Idle timer + human input. Touch/keys wake immediately; the coarse tick is
+  // the only thing that can blank. An open conversation counts as presence even
+  // in a quiet moment (echo cancellation keeps James' own voice off the mic).
+  useEffect(() => {
+    const onActivity = (): void =>
+      dispatchNight({ type: "activity", now: Date.now() });
+
+    window.addEventListener("pointerdown", onActivity);
+    window.addEventListener("keydown", onActivity);
+
+    const tickId = window.setInterval(() => {
+      if (liveModeRef.current !== "wake") {
+        dispatchNight({ type: "activity", now: Date.now() });
+        return;
+      }
+
+      dispatchNight({ type: "tick", now: Date.now() });
+    }, 10_000);
+
+    return () => {
+      window.removeEventListener("pointerdown", onActivity);
+      window.removeEventListener("keydown", onActivity);
+      window.clearInterval(tickId);
+    };
+  }, [dispatchNight]);
+
   // Mic capture must keep running (it streams frames to the wake listener), but
   // there's no meter UI anymore — only surface a hard failure to the banner.
   // Re-runs when the chosen input changes so the new device takes over.
@@ -231,7 +296,9 @@ export function App(): React.JSX.Element {
     const cleanup = startMicrophoneLoop({
       deviceId: effectiveMicId,
       onError: setErrorMessage,
-      onLevel: () => {},
+      // Smoothed level feeds the night watcher (presence detection), not a
+      // meter — there's no meter UI anymore.
+      onLevel: handleMicLevel,
       // Labels are available now that the mic is granted — refresh so the
       // dropdown shows real device names instead of "Microphone N".
       onReady: () => void refreshAudioInputs(),
@@ -254,6 +321,7 @@ export function App(): React.JSX.Element {
     familySetupOpen,
     refreshAudioInputs,
     handleMicChange,
+    handleMicLevel,
     restartCapture,
     markCaptureHealthy,
   ]);
@@ -334,18 +402,12 @@ export function App(): React.JSX.Element {
 
   return (
     <div className={sessionActive ? "kiosk kiosk--live" : "kiosk"}>
-      {/* Always-on "James is listening" rim around the whole screen. Hidden
-          while Family Setup owns the mic (capture is torn down then) or the
-          listener isn't running at all. */}
-      {snapshot.isListening && !familySetupOpen ? (
+      {/* Neon rim shown ONLY while James is invoked: it lights the instant the
+          wake fires ("connecting") and stays through the live conversation.
+          While merely waiting for the wake word there is no border at all. */}
+      {sessionActive && !familySetupOpen ? (
         <ListeningBorder
-          mode={
-            liveMode === "wake"
-              ? "idle"
-              : liveMode === "connecting"
-                ? "connecting"
-                : "live"
-          }
+          mode={liveMode === "connecting" ? "connecting" : "live"}
         />
       ) : null}
 
@@ -396,11 +458,18 @@ export function App(): React.JSX.Element {
         <header className="voice-strip voice-strip--clock">
           <div className="voice-orb" />
           <IdleClock />
+          {/* Weather lives up here now (its old quadrant is gone); tapping it
+              still opens the fullscreen weather view. */}
+          <WeatherStrip onExpand={() => setFocusedPanel("weather")} />
         </header>
       )}
 
       {errorMessage ? <div className="error-banner">{errorMessage}</div> : null}
 
+      {/* Two big panels readable from across the kitchen: Calendar and
+          Reminders each take a full-height column. Weather moved to the top
+          strip; Notes is hidden for now (still reachable fullscreen via the
+          voice show_notes_card tool). */}
       <main className="quad-grid">
         <section className="quad quad--calendar">
           <PanelHeader
@@ -413,19 +482,6 @@ export function App(): React.JSX.Element {
           </div>
         </section>
 
-        <section className="quad quad--weather">
-          <button
-            aria-label="Expand weather"
-            className="quad-expand quad-expand--floating"
-            onClick={() => setFocusedPanel("weather")}
-            title="Expand weather"
-            type="button"
-          >
-            ⛶
-          </button>
-          <WeatherPanel />
-        </section>
-
         <section className="quad quad--reminders">
           <PanelHeader
             onExpand={() => setFocusedPanel("reminders")}
@@ -433,16 +489,6 @@ export function App(): React.JSX.Element {
           />
           <div className="quad-body">
             <RemindersPanel focusList={reminderList} />
-          </div>
-        </section>
-
-        <section className="quad quad--notes">
-          <PanelHeader
-            onExpand={() => setFocusedPanel("notes")}
-            title="Notes"
-          />
-          <div className="quad-body">
-            <NotesPanel />
           </div>
         </section>
       </main>
@@ -479,6 +525,11 @@ export function App(): React.JSX.Element {
           }}
         />
       ) : null}
+
+      {/* Night blanking: pure black sheet over everything (including the
+          listening border) once the room has been silent long enough. The
+          window-level pointerdown listener wakes it, so no handler here. */}
+      {screenOff ? <div className="night-screen" aria-hidden="true" /> : null}
     </div>
   );
 }

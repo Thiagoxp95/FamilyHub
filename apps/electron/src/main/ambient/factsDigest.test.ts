@@ -24,28 +24,37 @@ afterEach(() => {
 
 describe("runDigest", () => {
   it("stores facts with expiry = model date + 7 days, and null expiry stays null", async () => {
-    const now = Date.parse("2026-07-11T12:00:00.000Z");
-    store.addUtterance("dentist appointment next tuesday", "ambient", now - 60_000);
-    store.addUtterance("James likes oat milk", "ambient", now - 30_000);
+    // Freeze the clock at the scenario date: search() filters expiry against
+    // the real Date.now(), so hardcoded dates here become a time bomb once the
+    // wall clock passes expiresAt + 7 days (it detonated on 2026-07-15).
+    vi.useFakeTimers();
+    try {
+      const now = Date.parse("2026-07-11T12:00:00.000Z");
+      vi.setSystemTime(now);
+      store.addUtterance("dentist appointment next tuesday", "ambient", now - 60_000);
+      store.addUtterance("James likes oat milk", "ambient", now - 30_000);
 
-    const chatJSON = vi.fn().mockResolvedValue({
-      facts: [
-        // "Event" 3 days ago relative to `now` — without the +7 day grace
-        // period this would already be expired at `now`.
-        { text: "dentist appointment", expiresAt: "2026-07-08" },
-        { text: "James likes oat milk", expiresAt: null },
-      ],
-    });
-    const ollama = stubOllama(chatJSON);
+      const chatJSON = vi.fn().mockResolvedValue({
+        facts: [
+          // "Event" 3 days ago relative to `now` — without the +7 day grace
+          // period this would already be expired at `now`.
+          { text: "dentist appointment", expiresAt: "2026-07-08" },
+          { text: "James likes oat milk", expiresAt: null },
+        ],
+      });
+      const ollama = stubOllama(chatJSON);
 
-    const added = await runDigest(store, ollama, now);
+      const added = await runDigest(store, ollama, now);
 
-    expect(added).toBe(2);
-    const eventHit = store.search(null, "dentist", { layer: "fact" });
-    expect(eventHit).toHaveLength(1);
+      expect(added).toBe(2);
+      const eventHit = store.search(null, "dentist", { layer: "fact" });
+      expect(eventHit).toHaveLength(1);
 
-    const preferenceHit = store.search(null, "oat milk", { layer: "fact" });
-    expect(preferenceHit).toHaveLength(1);
+      const preferenceHit = store.search(null, "oat milk", { layer: "fact" });
+      expect(preferenceHit).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("advances meta.lastDigestTs to `now` on full success", async () => {

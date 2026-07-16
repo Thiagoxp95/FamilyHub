@@ -67,11 +67,9 @@ export function formatClock(value: string | null): string | null {
   });
 }
 
-export function WeatherPanel({
-  variant = "compact",
-}: {
-  variant?: "compact" | "expanded";
-} = {}): React.JSX.Element {
+// Shared subscription to the main process's weather feed (initial fetch +
+// push updates), used by both the full panel and the compact strip readout.
+function useWeather(): WeatherResult | null {
   const [result, setResult] = useState<WeatherResult | null>(null);
 
   useEffect(() => {
@@ -84,6 +82,54 @@ export function WeatherPanel({
 
     return window.familyHub.dashboard.onWeather(setResult);
   }, []);
+
+  return result;
+}
+
+// Compact one-line readout that lives in the top clock strip: emoji, current
+// temperature, condition, and today's range. Tapping it opens the fullscreen
+// weather panel. Renders nothing until weather has loaded (the strip simply
+// shows the clocks alone).
+export function WeatherStrip({
+  onExpand,
+}: {
+  onExpand: () => void;
+}): React.JSX.Element | null {
+  const result = useWeather();
+
+  if (!result?.ok) {
+    return null;
+  }
+
+  const weather = result.weather;
+
+  return (
+    <button
+      aria-label="Expand weather"
+      className="weather-strip"
+      onClick={onExpand}
+      type="button"
+    >
+      <span className="weather-strip__emoji">
+        {weatherEmoji(weather.condition.category, weather.condition.isDay)}
+      </span>
+      <span className="weather-strip__temp">{weather.temperatureC}°</span>
+      <span className="weather-strip__side">
+        <span className="weather-strip__desc">{weather.condition.label}</span>
+        <span className="weather-strip__range">
+          H {weather.highC}° · L {weather.lowC}°
+        </span>
+      </span>
+    </button>
+  );
+}
+
+export function WeatherPanel({
+  variant = "compact",
+}: {
+  variant?: "compact" | "expanded";
+} = {}): React.JSX.Element {
+  const result = useWeather();
 
   if (!result) {
     return (
